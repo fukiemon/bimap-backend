@@ -1,9 +1,13 @@
 <?php
 // POST /api/login.php
-// Body: { "email": "...", "password": "...", "user_type": "resident" | "driver" }
-// ("email" also accepts a phone number - we match against either column)
+// Body: { "email": "...", "password": "..." }
+// ("email" also accepts a phone number - matched against either column)
 //
-// Returns: { success: true, token: "...", user: {...} }
+// user_type is optional. If omitted, we try resident first, then driver.
+// Pass it explicitly if you want to skip the guesswork (e.g. from a
+// role-specific login screen later).
+//
+// Returns: { success: true, token: "...", user: { id, name, email, role, barangay } }
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
@@ -12,31 +16,41 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $body = get_json_body();
-// Accept whichever of these was actually provided (non-empty), in this
-// priority order, rather than short-circuiting on a key that exists but is blank.
+
 $identifier = '';
 foreach (['email', 'identifier', 'phone'] as $key) {
     if (trim((string)($body[$key] ?? '')) !== '') { $identifier = trim($body[$key]); break; }
 }
-$password   = $body['password'] ?? '';
-$userType   = strtolower(trim($body['user_type'] ?? 'resident'));
+$password = $body['password'] ?? '';
+$requestedType = strtolower(trim($body['user_type'] ?? ''));
 
 if ($identifier === '' || $password === '') {
     json_error('Email/phone and password are required.');
 }
-
-if (!in_array($userType, ['resident', 'driver'], true)) {
+if ($requestedType !== '' && !in_array($requestedType, ['resident', 'driver'], true)) {
     json_error('user_type must be "resident" or "driver".');
 }
 
-$table = $userType; // 'resident' or 'driver' — both table names are safe, whitelisted above
+// Try each candidate table in order until we find a matching, verified account.
+$candidates = $requestedType !== '' ? [$requestedType] : ['resident', 'driver'];
 
-$stmt = $conn->prepare("SELECT * FROM `$table` WHERE email = ? OR phone = ? LIMIT 1");
-$stmt->bind_param('ss', $identifier, $identifier);
-$stmt->execute();
-$user = $stmt->get_result()->fetch_assoc();
+$user = null;
+$userType = null;
 
-if (!$user || !password_verify($password, $user['password'])) {
+foreach ($candidates as $table) {
+    $stmt = $conn->prepare("SELECT * FROM `$table` WHERE email = ? OR phone = ? LIMIT 1");
+    $stmt->bind_param('ss', $identifier, $identifier);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+
+    if ($row && password_verify($password, $row['password'])) {
+        $user = $row;
+        $userType = $table;
+        break;
+    }
+}
+
+if (!$user) {
     json_error('Invalid credentials.', 401);
 }
 
@@ -44,14 +58,22 @@ if ($userType === 'driver' && (int)($user['is_verified'] ?? 0) === 0) {
     json_error('Your driver account is still pending admin approval.', 403);
 }
 
-unset($user['password']); // never send the hash back
-
 $token = generate_token([
     'user_type' => $userType,
     'user_id'   => (int)$user['id'],
 ]);
 
+// Shape the response to exactly match AppUser.fromJson's expected keys:
+// id, name, email, role, barangay (address is not used yet, left null).
 json_ok([
     'token' => $token,
-    'user'  => $user,
+    'user'  => [
+        'id'       => (int)$user['id'],
+        'name'     => trim($user['first_name'] . ' ' . $user['last_name']),
+        'email'    => $user['email'],
+        'role'     => $userType,
+        'barangay' => $userType === 'driver'
+            ? ($user['assigned_barangay'] ?? null)
+            : ($user['barangay'] ?? null),
+    ],
 ]);
