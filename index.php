@@ -22,15 +22,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email    = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    $stmt = $conn->prepare("SELECT id, name, password, profile_pic FROM admin WHERE email = ?");
+    $stmt = $conn->prepare("SELECT id, name, password, profile_pic_data FROM admin WHERE email = ?");
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $admin = $stmt->get_result()->fetch_assoc();
-
+ 
     if ($admin && password_verify($password, $admin['password'])) {
         $_SESSION['admin_id']   = $admin['id'];
         $_SESSION['admin_name'] = $admin['name'];
-        $_SESSION['admin_pic']  = $admin['profile_pic'];
+        $_SESSION['admin_pic']  = $admin['profile_pic_data'];
         header('Location: admin/dashboard.php');
         exit;
     } else {
