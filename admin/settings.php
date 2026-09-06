@@ -29,9 +29,18 @@ if (isset($_POST['change_password'])) {
 }
 
 // Update profile picture
+//
+// NOTE: this used to save the upload to ../uploads/admin_profiles/ on disk
+// and store just the relative path in the DB. That breaks on Render (and
+// any container host): the container's local filesystem is not persistent,
+// so anything written here disappears the next time the container restarts
+// or redeploys — even though the DB path still points at it. The fix is to
+// store the image itself (as a base64 data URI) directly in the database,
+// the same pattern already used for driver license photos and complaint
+// photos elsewhere in this schema.
 if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
     $file = $_FILES['profile_pic'];
- 
+
     if ($file['error'] === UPLOAD_ERR_NO_FILE) {
         $error = 'Please choose an image first.';
     } elseif ($file['error'] !== UPLOAD_ERR_OK) {
@@ -40,7 +49,7 @@ if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
         $allowed = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp'];
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $imgInfo = @getimagesize($file['tmp_name']);
- 
+
         if (!isset($allowed[$ext]) || $imgInfo === false) {
             $error = 'Please upload a valid image file (JPG, PNG, GIF, or WEBP).';
         } elseif ($file['size'] > 3 * 1024 * 1024) {
@@ -48,15 +57,15 @@ if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
         } else {
             $mimeType = $allowed[$ext];
             $imageBytes = file_get_contents($file['tmp_name']);
- 
+
             if ($imageBytes === false) {
                 $error = 'Could not read the uploaded image. Please try again.';
             } else {
                 $dataUri = 'data:' . $mimeType . ';base64,' . base64_encode($imageBytes);
- 
+
                 $stmt = $conn->prepare("UPDATE admin SET profile_pic_data=? WHERE id=?");
                 $stmt->bind_param("si", $dataUri, $_SESSION['admin_id']);
- 
+
                 if ($stmt->execute()) {
                     $_SESSION['admin_pic'] = $dataUri;
                     $success = 'Profile picture updated successfully!';
@@ -138,7 +147,7 @@ include '../includes/admin_header.php';
     <form method="POST" enctype="multipart/form-data" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
       <div style="width:84px;height:84px;border-radius:50%;overflow:hidden;background:#e0e7ef;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:3px solid #f0f4f8;">
         <?php if (!empty($_SESSION['admin_pic'])): ?>
-          <img src="../<?= htmlspecialchars($_SESSION['admin_pic']) ?>" alt="Profile picture" style="width:100%;height:100%;object-fit:cover;">
+          <img src="<?= htmlspecialchars($_SESSION['admin_pic']) ?>" alt="Profile picture" style="width:100%;height:100%;object-fit:cover;">
         <?php else: ?>
           <svg width="44" height="44" viewBox="0 0 24 24" fill="#888"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
         <?php endif; ?>
