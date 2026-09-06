@@ -104,31 +104,19 @@ include '../includes/admin_header.php';
             <th>Status</th>
             <th>Resident</th>
             <th>Location</th>
-            <th>Concern</th>
+            <th>Waste Type</th>
             <th>Date</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($complaints as $c):
-            $concern = $c['concern'] ?? '';
-            preg_match('/\[Location:\s*([^\]]+)\]/i', $concern, $loc_match);
-            $location = $loc_match[1] ?? 'Not specified';
-
-            $concern_clean = preg_replace('/\[\s*[^]]+?\s*:\s*[^]]+?\s*\]\s*/i', '', $concern);
-            $concern_clean = trim(preg_replace('/\s+/', ' ', $concern_clean));
-            if (empty($concern_clean)) $concern_clean = $concern;
-
-            $max_length = 50;
-            if (strlen($concern_clean) > $max_length) {
-              $preview = substr($concern_clean, 0, $max_length);
-              $last_space = strrpos($preview, ' ');
-              $concern_preview = ($last_space !== false) ? substr($preview, 0, $last_space) . '...' : $preview . '...';
-            } else {
-              $concern_preview = $concern_clean;
-            }
-
-            $has_video = preg_match('/\[Video:\s*([^\]]+)\]/i', $concern);
+            // barangay and waste_type are real columns on `complaint` now —
+            // no need to regex-parse them back out of the free-text concern
+            // field the way this table used to. Concern text (and any photo/
+            // video attached to it) still shows in the View modal below.
+            $location   = !empty($c['barangay']) ? $c['barangay'] : 'Not specified';
+            $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : '—';
           ?>
           <tr>
             <td><strong>#<?= htmlspecialchars($c['id'] ?? '—') ?></strong></td>
@@ -137,17 +125,9 @@ include '../includes/admin_header.php';
                 <?= htmlspecialchars($c['status'] ?? 'Pending') ?>
               </span>
             </td>
-            <td>
-              <div style="font-weight:700;font-size:14px;"><?= htmlspecialchars($c['resident_name'] ?? 'Unknown Resident') ?></div>
-              <div style="font-size:12.5px;color:#555;"><?= htmlspecialchars($c['resident_phone'] ?? '—') ?></div>
-            </td>
+            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($c['resident_name'] ?? 'Unknown Resident') ?></td>
             <td style="font-size:13.5px;"><?= htmlspecialchars($location) ?></td>
-            <td style="max-width:230px;line-height:1.45;">
-              <?= htmlspecialchars($concern_preview) ?>
-              <?php if ($has_video): ?>
-                <span style="display:inline-block;margin-left:4px;background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;">🎥 Video</span>
-              <?php endif; ?>
-            </td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($waste_type) ?></td>
             <td style="font-size:13px;color:#555;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
             <td>
               <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c)) ?>)">View</button>
@@ -286,8 +266,8 @@ function viewComplaint(c) {
   const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
   const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
 
-  const location  = locMatch  ? locMatch[1]  : '—';
-  const wasteType = typeMatch ? typeMatch[1] : '—';
+  const location  = c.barangay || (locMatch ? locMatch[1] : '—');
+  const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
   const videoPath = videoMatch ? videoMatch[1].trim() : null;
 
   let description = concernText
