@@ -31,7 +31,7 @@ if (isset($_POST['change_password'])) {
 // Update profile picture
 if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
     $file = $_FILES['profile_pic'];
-
+ 
     if ($file['error'] === UPLOAD_ERR_NO_FILE) {
         $error = 'Please choose an image first.';
     } elseif ($file['error'] !== UPLOAD_ERR_OK) {
@@ -40,36 +40,29 @@ if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
         $allowed = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp'];
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $imgInfo = @getimagesize($file['tmp_name']);
-
+ 
         if (!isset($allowed[$ext]) || $imgInfo === false) {
             $error = 'Please upload a valid image file (JPG, PNG, GIF, or WEBP).';
         } elseif ($file['size'] > 3 * 1024 * 1024) {
             $error = 'Image must be smaller than 3MB.';
         } else {
-            $uploadDir = '../uploads/admin_profiles/';
-            if (!is_dir($uploadDir)) {
-                mkdir($uploadDir, 0755, true);
-            }
-
-            $filename = 'admin_' . (int)$_SESSION['admin_id'] . '_' . time() . '.' . $ext;
-            $destPath = $uploadDir . $filename;
-
-            if (move_uploaded_file($file['tmp_name'], $destPath)) {
-                // Clean up the old picture file, if any
-                $old = $conn->query("SELECT profile_pic FROM admin WHERE id=" . (int)$_SESSION['admin_id'])->fetch_assoc();
-                if (!empty($old['profile_pic']) && is_file('../' . $old['profile_pic'])) {
-                    @unlink('../' . $old['profile_pic']);
-                }
-
-                $relativePath = 'uploads/admin_profiles/' . $filename;
-                $stmt = $conn->prepare("UPDATE admin SET profile_pic=? WHERE id=?");
-                $stmt->bind_param("si", $relativePath, $_SESSION['admin_id']);
-                $stmt->execute();
-
-                $_SESSION['admin_pic'] = $relativePath;
-                $success = 'Profile picture updated successfully!';
+            $mimeType = $allowed[$ext];
+            $imageBytes = file_get_contents($file['tmp_name']);
+ 
+            if ($imageBytes === false) {
+                $error = 'Could not read the uploaded image. Please try again.';
             } else {
-                $error = 'Could not save the uploaded image. Please try again.';
+                $dataUri = 'data:' . $mimeType . ';base64,' . base64_encode($imageBytes);
+ 
+                $stmt = $conn->prepare("UPDATE admin SET profile_pic_data=? WHERE id=?");
+                $stmt->bind_param("si", $dataUri, $_SESSION['admin_id']);
+ 
+                if ($stmt->execute()) {
+                    $_SESSION['admin_pic'] = $dataUri;
+                    $success = 'Profile picture updated successfully!';
+                } else {
+                    $error = 'Could not save the uploaded image. Please try again.';
+                }
             }
         }
     }
