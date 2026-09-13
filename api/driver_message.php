@@ -43,6 +43,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 } elseif ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
+    // Lightweight check for a home-screen/nav badge: how many admin replies
+    // has this driver NOT seen yet. Deliberately does not mark anything as
+    // read, since just glancing at a badge count isn't "opening the chat".
+    if (isset($_GET['count_only']) && $_GET['count_only'] === '1') {
+        $stmt = $conn->prepare(
+            "SELECT COUNT(*) AS cnt FROM driver_message
+             WHERE driver_id = ? AND sender = 'admin' AND is_read = 0"
+        );
+        $stmt->bind_param('i', $driverId);
+        $stmt->execute();
+        $unread = (int) ($stmt->get_result()->fetch_assoc()['cnt'] ?? 0);
+        json_ok(['unread' => $unread]);
+    }
+
     $stmt = $conn->prepare(
         "SELECT id, sender, message, created_at FROM driver_message
          WHERE driver_id = ? ORDER BY created_at ASC LIMIT 200"
@@ -50,6 +64,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt->bind_param('i', $driverId);
     $stmt->execute();
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+    // Opening the full conversation means the driver has now seen every
+    // admin reply in it, so clear the unread flag those rows were counted
+    // under above.
+    $read = $conn->prepare(
+        "UPDATE driver_message SET is_read = 1 WHERE driver_id = ? AND sender = 'admin' AND is_read = 0"
+    );
+    $read->bind_param('i', $driverId);
+    $read->execute();
 
     json_ok(['messages' => $rows]);
 
