@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BiMAP — Barangay Integrated Monitoring & Alert Platform | Malita, Davao Occidental</title>
+<title>BiMAP — Barangay Integrated Monitoring and Administrative Platform | Malita, Davao Occidental</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
@@ -663,7 +663,7 @@ footer {
       </h1>
 
       <p class="hero-subtitle">
-        BiMAP — the Barangay Integrated Monitoring &amp; Alert Platform — connects residents, 
+        The Barangay Integrated Monitoring and Administrative Platform connects residents, 
         barangay officials, and local government for faster, smarter community service delivery.
       </p>
 
@@ -675,7 +675,7 @@ footer {
 
       <div class="hero-stats">
         <div class="hero-stat">
-          <div class="stat-num">50+</div>
+          <div class="stat-num">30</div>
           <div class="stat-label">Barangays</div>
         </div>
         <div class="hero-stat">
@@ -820,8 +820,8 @@ footer {
       <p class="mayor-desc">
         The Municipality of Malita is committed to delivering responsive, transparent, and 
         people-centered governance. Through BiMAP, we bring barangay services closer to every 
-        resident — enabling faster complaint resolution, real-time community updates, and 
-        improved coordination across all our barangays. Together, we build a stronger, more 
+        resident enabling faster complaint resolution, real-time community updates, and 
+        improved coordination across all our barangays. Together, we build a stronger and more 
         connected Malita.
       </p>
     </div>
@@ -1097,22 +1097,22 @@ footer {
 
     <div class="gallery-strip fade-up">
       <div class="gallery-item">
-        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/gaginaway.jpg" alt="15th Gaginaway Festival">
+        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/gaginaway.jpg" alt="15th Gaginaway Festival" onerror="this.closest('.gallery-item').style.display='none';">
         <div class="gallery-overlay"><i class="fa-solid fa-expand"></i></div>
         <div class="gallery-label">Gaginaway Festival</div>
       </div>
       <div class="gallery-item">
-        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/performance-min.jpg" alt="Cultural Dance">
+        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/performance-min.jpg" alt="Cultural Dance" onerror="this.closest('.gallery-item').style.display='none';">
         <div class="gallery-overlay"><i class="fa-solid fa-expand"></i></div>
         <div class="gallery-label">Cultural Dance</div>
       </div>
       <div class="gallery-item">
-        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/torch_parade-min.jpg" alt="Torch Parade">
+        <img src="https://malita.gov.ph/wp-content/uploads/2023/10/397168179_298044373113478_3986282562422560244_n.jpg" alt="Torch Parade" onerror="this.closest('.gallery-item').style.display='none';">
         <div class="gallery-overlay"><i class="fa-solid fa-expand"></i></div>
         <div class="gallery-label">Torch Parade</div>
       </div>
       <div class="gallery-item">
-        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/awarding-min.jpg" alt="Awarding Ceremony">
+        <img src="https://malita.gov.ph/wp-content/uploads/2022/12/awarding-min.jpg" alt="Awarding Ceremony" onerror="this.closest('.gallery-item').style.display='none';">
         <div class="gallery-overlay"><i class="fa-solid fa-expand"></i></div>
         <div class="gallery-label">Awarding Ceremony</div>
       </div>
