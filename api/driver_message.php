@@ -38,8 +38,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     );
     $ins->bind_param('iss', $driverId, $driverName, $message);
     $ins->execute();
+    $newId = $conn->insert_id;
 
-    json_ok(['id' => $conn->insert_id], 201);
+    // Read back the row's own created_at (set by the DB's DEFAULT
+    // CURRENT_TIMESTAMP) rather than using PHP's time. This is the
+    // authoritative send time — the app uses it instead of the device
+    // clock so the timestamp shown is always real and accurate.
+    $sel = $conn->prepare("SELECT created_at FROM driver_message WHERE id = ?");
+    $sel->bind_param('i', $newId);
+    $sel->execute();
+    $row = $sel->get_result()->fetch_assoc();
+
+    json_ok(['id' => $newId, 'created_at' => $row['created_at']], 201);
 
 } elseif ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
