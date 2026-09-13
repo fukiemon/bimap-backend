@@ -3,7 +3,10 @@ session_start();
 require_once '../includes/db.php';
 header('Content-Type: application/json');
 
-// TODO: keep/add whatever admin-auth check your other admin pages use.
+// Same check every admin page runs via admin_header.php. This endpoint is
+// polled directly by fetch(), so it needs its own auth check since it never
+// includes admin_header.php.
+requireAdminLogin();
 
 $driver_id = intval($_GET['driver'] ?? 0);
 $after_id  = intval($_GET['after_id'] ?? 0);
