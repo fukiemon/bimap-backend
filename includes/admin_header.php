@@ -3,6 +3,21 @@
 // Usage: include at top of each admin page
 // Requires $page_title and $active_nav to be set before including
 requireAdminLogin();
+
+// Total unread driver messages across ALL threads, for the sidebar badge.
+// Reuses the exact same is_read logic messages.php already uses per-thread
+// (SELECT COUNT(*) ... WHERE sender='driver' AND is_read=0), just summed
+// across every driver instead of grouped by one. Falls back to 0 if $conn
+// isn't in scope on whichever page included this header — every admin page
+// that already does require_once '../includes/db.php' before including this
+// file will have it.
+$unreadMessagesCount = 0;
+if (isset($conn)) {
+    $unreadResult = $conn->query("SELECT COUNT(*) AS cnt FROM driver_message WHERE sender='driver' AND is_read=0");
+    if ($unreadResult) {
+        $unreadMessagesCount = (int) ($unreadResult->fetch_assoc()['cnt'] ?? 0);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -69,10 +84,26 @@ requireAdminLogin();
     font-weight: 700;
     transition: background 0.15s, color 0.15s;
     border-radius: 0;
+    position: relative;
   }
   .nav-item:hover { background: rgba(255,255,255,0.15); color: white; }
   .nav-item.active { background: rgba(255,255,255,0.22); color: white; }
   .nav-item svg { flex-shrink: 0; opacity: 0.9; }
+  .nav-badge {
+    margin-left: auto;
+    background: #e53935;
+    color: white;
+    font-size: 11px;
+    font-weight: 800;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    line-height: 1;
+  }
   .nav-logout { margin-top: auto; border-top: 1px solid rgba(255,255,255,0.15); }
 
   /* MAIN CONTENT */
@@ -316,6 +347,9 @@ requireAdminLogin();
       <a href="messages.php" class="nav-item <?= ($active_nav??'') === 'messages' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
         Messages
+        <?php if ($unreadMessagesCount > 0): ?>
+          <span class="nav-badge"><?= $unreadMessagesCount > 9 ? '9+' : $unreadMessagesCount ?></span>
+        <?php endif; ?>
       </a>
       <a href="complaints.php" class="nav-item <?= ($active_nav??'') === 'complaints' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
