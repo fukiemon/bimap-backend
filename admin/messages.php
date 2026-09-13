@@ -4,19 +4,6 @@ require_once '../includes/db.php';
 $page_title='Driver Messages';
 $active_nav='messages';
 
-// Handle admin reply
-if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['reply_msg'])) {
-    $driver_id=intval($_POST['driver_id']);
-    $driver_name=trim($_POST['driver_name']??'Driver');
-    $msg=trim($_POST['reply_msg']);
-    if ($msg && $driver_id) {
-        $ins=$conn->prepare("INSERT INTO driver_message (driver_id,driver_name,message,sender) VALUES (?,?,?,'admin')");
-        $ins->bind_param("iss",$driver_id,$driver_name,$msg);
-        $ins->execute();
-    }
-    header("Location: messages.php?driver=$driver_id"); exit;
-}
-
 // Get list of drivers who have messaged
 $threads=$conn->query("SELECT dm.driver_id, MAX(dm.driver_name) as driver_name, MAX(d.phone) as phone, MAX(d.email) as email,
     (SELECT message FROM driver_message WHERE driver_id=dm.driver_id ORDER BY created_at DESC LIMIT 1) as last_msg,
@@ -28,11 +15,16 @@ $selected_driver=intval($_GET['driver']??0);
 $conversation=[];
 $selected_name='';
 if ($selected_driver) {
-    $res=$conn->query("SELECT * FROM driver_message WHERE driver_id=$selected_driver ORDER BY created_at ASC LIMIT 100");
+    $stmt=$conn->prepare("SELECT * FROM driver_message WHERE driver_id=? ORDER BY created_at ASC LIMIT 100");
+    $stmt->bind_param("i",$selected_driver);
+    $stmt->execute();
+    $res=$stmt->get_result();
     if ($res) $conversation=$res->fetch_all(MYSQLI_ASSOC);
     if (!empty($conversation)) $selected_name=$conversation[0]['driver_name'];
     // Mark as read
-    $conn->query("UPDATE driver_message SET is_read=1 WHERE driver_id=$selected_driver AND sender='driver'");
+    $upd=$conn->prepare("UPDATE driver_message SET is_read=1 WHERE driver_id=? AND sender='driver'");
+    $upd->bind_param("i",$selected_driver);
+    $upd->execute();
 }
 
 include '../includes/admin_header.php';
@@ -69,6 +61,7 @@ include '../includes/admin_header.php';
 .chat-textarea:focus{border-color:#1a73e8}
 .send-btn{width:40px;height:40px;border-radius:50%;background:#1a73e8;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;flex-shrink:0}
 .send-btn:hover{background:#0d47a1}
+.send-btn:disabled{background:#9baabb;cursor:default}
 .no-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9baabb;text-align:center;gap:10px}
 .no-chat .ni{font-size:56px;opacity:0.4}
 .no-chat p{font-size:14px;font-weight:700}
@@ -102,7 +95,7 @@ include '../includes/admin_header.php';
       <div class="ch-avatar">🚛</div>
       <div><div class="ch-name"><?= htmlspecialchars($selected_name) ?></div><div class="ch-status">Driver</div></div>
     </div>
-    <div class="chat-messages" id="cm">
+    <div class="chat-messages" id="cm" data-last-id="<?= !empty($conversation) ? (int)end($conversation)['id'] : 0 ?>">
       <?php foreach ($conversation as $m):
         $isAdmin=$m['sender']==='admin';
         $dt=new DateTime($m['created_at']); $t=$dt->format('g:i A');
@@ -114,11 +107,11 @@ include '../includes/admin_header.php';
       <?php endforeach; ?>
     </div>
     <div class="chat-input-bar">
-      <form method="POST" style="display:contents" id="replyForm">
-        <input type="hidden" name="driver_id" value="<?= $selected_driver ?>">
+      <form id="replyForm" style="display:contents">
+        <input type="hidden" name="driver_id" id="driverIdInput" value="<?= $selected_driver ?>">
         <input type="hidden" name="driver_name" value="<?= htmlspecialchars($selected_name) ?>">
         <textarea class="chat-textarea" name="reply_msg" id="replyInput" placeholder="Type a reply..." rows="1" maxlength="500"></textarea>
-        <button type="submit" class="send-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+        <button type="submit" class="send-btn" id="sendBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
       </form>
     </div>
     <?php else: ?>
@@ -128,9 +121,84 @@ include '../includes/admin_header.php';
 </div>
 
 <script>
-const cm=document.getElementById('cm');
-if(cm)cm.scrollTop=cm.scrollHeight;
-const ri=document.getElementById('replyInput');
-if(ri){ri.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'});ri.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('replyForm').submit()}})}
+const cm = document.getElementById('cm');
+const driverId = <?= (int)$selected_driver ?>;
+if (cm) cm.scrollTop = cm.scrollHeight;
+
+const ri = document.getElementById('replyInput');
+const form = document.getElementById('replyForm');
+const sendBtn = document.getElementById('sendBtn');
+
+function escapeAndBuildBubble(msg, sender, time) {
+    const wrap = document.createElement('div');
+    wrap.className = 'bubble-wrap ' + (sender === 'admin' ? 'bw-me' : 'bw-driver');
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble ' + (sender === 'admin' ? 'bubble-me' : 'bubble-driver');
+    bubble.textContent = msg; // textContent avoids HTML injection
+
+    const btime = document.createElement('div');
+    btime.className = 'btime';
+    btime.textContent = (sender === 'admin' ? 'You' : 'Driver') + ' • ' + time;
+
+    wrap.appendChild(bubble);
+    wrap.appendChild(btime);
+    return wrap;
+}
+
+if (form) {
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const text = ri.value.trim();
+        if (!text) return;
+
+        sendBtn.disabled = true;
+        const fd = new FormData(form);
+
+        fetch('messages_send.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    cm.appendChild(escapeAndBuildBubble(data.message, 'admin', data.time));
+                    cm.dataset.lastId = data.id;
+                    cm.scrollTop = cm.scrollHeight;
+                    ri.value = '';
+                    ri.style.height = 'auto';
+                } else {
+                    alert(data.error || 'Failed to send message.');
+                }
+            })
+            .catch(() => alert('Network error sending message.'))
+            .finally(() => { sendBtn.disabled = false; ri.focus(); });
+    });
+
+    ri.addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+    });
+    ri.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            form.requestSubmit();
+        }
+    });
+}
+
+// Poll for new driver replies (and admin messages sent from elsewhere) every 4s
+if (driverId && cm) {
+    setInterval(function () {
+        fetch(`messages_poll.php?driver=${driverId}&after_id=${cm.dataset.lastId}`)
+            .then(r => r.json())
+            .then(msgs => {
+                if (!Array.isArray(msgs) || msgs.length === 0) return;
+                msgs.forEach(m => {
+                    cm.appendChild(escapeAndBuildBubble(m.message, m.sender, m.time));
+                    cm.dataset.lastId = m.id;
+                });
+                cm.scrollTop = cm.scrollHeight;
+            })
+            .catch(() => { /* silent fail, retry next interval */ });
+    }, 4000);
+}
 </script>
 <?php include '../includes/admin_footer.php'; ?>
