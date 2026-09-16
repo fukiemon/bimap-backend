@@ -18,6 +18,16 @@ if (isset($conn)) {
         $unreadMessagesCount = (int) ($unreadResult->fetch_assoc()['cnt'] ?? 0);
     }
 }
+
+// Pending driver registrations awaiting approval, for the sidebar badge on
+// "Driver Approvals". Same pattern as $unreadMessagesCount above.
+$pendingDriverCount = 0;
+if (isset($conn)) {
+    $pendingDriverResult = $conn->query("SELECT COUNT(*) AS cnt FROM driver WHERE is_verified=0");
+    if ($pendingDriverResult) {
+        $pendingDriverCount = (int) ($pendingDriverResult->fetch_assoc()['cnt'] ?? 0);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -343,6 +353,9 @@ if (isset($conn)) {
       <a href="driver_approvals.php" class="nav-item <?= ($active_nav??'') === 'driver_approvals' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
         Driver Approvals
+        <?php if ($pendingDriverCount > 0): ?>
+          <span class="nav-badge"><?= $pendingDriverCount > 9 ? '9+' : $pendingDriverCount ?></span>
+        <?php endif; ?>
       </a>
       <a href="messages.php" class="nav-item <?= ($active_nav??'') === 'messages' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
