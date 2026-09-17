@@ -9,6 +9,11 @@
  * Fill in your real credentials in config.php (see below) — never commit
  * real secrets to GitHub. Use environment variables on Render instead
  * (Render → your service → Environment tab) and read them with getenv().
+ *
+ * CHANGES FROM YOUR ORIGINAL:
+ *  - Added contact_is_verified() so register.php can require a completed
+ *    OTP step before creating an account (it previously didn't check this
+ *    at all).
  */
 
 require_once __DIR__ . '/config.php';
@@ -73,6 +78,30 @@ function store_verification_code(mysqli $conn, string $contact, string $type, st
     );
     $stmt->bind_param("ssssi", $contact, $type, $code, $purpose, $ttl_minutes);
     $stmt->execute();
+}
+
+/**
+ * NEW: Check whether a contact has a completed, still-fresh OTP verification
+ * on file for the given purpose. register.php calls this before creating an
+ * account so the OTP step can't be skipped.
+ *
+ * $valid_for_minutes controls how long a completed verification stays usable
+ * for registration after the code was confirmed — long enough to fill out
+ * the rest of the signup form, short enough that a stale verification can't
+ * be replayed much later. Adjust to taste.
+ */
+function contact_is_verified(mysqli $conn, string $contact, string $purpose = 'registration', int $valid_for_minutes = 30): bool
+{
+    $stmt = $conn->prepare(
+        "SELECT id FROM verification_codes
+         WHERE contact = ? AND purpose = ?
+         AND verified_at IS NOT NULL
+         AND verified_at > DATE_SUB(NOW(), INTERVAL ? MINUTE)
+         LIMIT 1"
+    );
+    $stmt->bind_param("ssi", $contact, $purpose, $valid_for_minutes);
+    $stmt->execute();
+    return (bool) $stmt->get_result()->fetch_assoc();
 }
 
 /**
