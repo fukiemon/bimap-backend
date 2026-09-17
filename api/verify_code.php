@@ -2,10 +2,16 @@
 /**
  * POST /api/verify_code.php
  * Body (JSON): { "contact": "09171234567", "code": "123456" }
+ *
+ * CHANGES FROM YOUR ORIGINAL:
+ *  - Include paths switched to __DIR__-based (absolute) instead of relative
+ *    ('../includes/...'), matching register.php and avoiding breakage if
+ *    this script is ever invoked from a different working directory.
+ *  - Verification logic itself was already correct — unchanged.
  */
 
-require_once '../includes/db.php';
-require_once 'includes/verification_helpers.php';
+require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/includes/verification_helpers.php';
 
 $input = json_decode(file_get_contents('php://input'), true);
 $contact = trim($input['contact'] ?? '');
