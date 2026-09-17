@@ -12,8 +12,16 @@
 //
 // Returns: { success: true, token, user } for residents (auto-verified),
 //          { success: true, pending_approval: true, user } for drivers.
+//
+// CHANGES FROM YOUR ORIGINAL:
+//  - Now requires that the submitted email/phone has a completed OTP
+//    verification on file (via contact_is_verified()) before the account
+//    is created. Previously the OTP endpoints existed but register.php
+//    never checked them, so the whole verification step could be skipped.
+//  - Requires verification_helpers.php for that check.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
+require_once __DIR__ . '/includes/verification_helpers.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_error('Method not allowed. Use POST.', 405);
@@ -72,6 +80,14 @@ if ($userType === 'resident') {
         json_error('An account with that email or phone already exists.', 409);
     }
 
+    // NEW: require a completed OTP verification for whichever contact was
+    // submitted. $contact must match, character-for-character, whatever
+    // string the app sent to send_verification.php / verify_code.php.
+    $contact = $email !== '' ? $email : $phone;
+    if (!contact_is_verified($conn, $contact)) {
+        json_error('Please verify your email or phone number before registering.', 403);
+    }
+
     $hash = password_hash($password, PASSWORD_DEFAULT);
     // Residents don't go through an admin approval step in this app (unlike
     // drivers), so we mark them verified immediately and let them log in right away.
@@ -108,6 +124,12 @@ if ($userType === 'resident') {
     }
     if (email_or_phone_taken($conn, 'driver', $email, $phone)) {
         json_error('An account with that email or phone already exists.', 409);
+    }
+
+    // NEW: same OTP requirement as residents, above.
+    $contact = $email !== '' ? $email : $phone;
+    if (!contact_is_verified($conn, $contact)) {
+        json_error('Please verify your email or phone number before registering.', 403);
     }
 
     $licensePhotoPath = save_base64_image($body['license_photo_base64'] ?? null, 'driver_licenses', 'license');
