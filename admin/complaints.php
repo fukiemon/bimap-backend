@@ -117,11 +117,15 @@ include '../includes/admin_header.php';
         <?php endif; ?>
 
         <?php foreach ($complaints as $c):
+            // barangay and waste_type are real columns on `complaint` now —
+            // no need to regex-parse them back out of the free-text concern
+            // field. Fall back to the old [Location:]/[Type:] tags for any
+            // legacy rows that predate those columns being populated.
             preg_match('/\[Location:\s*([^\]]+)\]/i', $c['concern'], $loc_match);
             preg_match('/\[Type:\s*([^\]]+)\]/i', $c['concern'], $type_match);
 
-            $location   = $loc_match[1]  ?? '—';
-            $waste_type = $type_match[1] ?? '—';
+            $location   = !empty($c['barangay'])   ? $c['barangay']   : ($loc_match[1]  ?? 'Not specified');
+            $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : ($type_match[1] ?? '—');
 
             $has_video = (bool) preg_match('/\[Video:\s*([^\]]+)\]/i', $c['concern']);
 
@@ -219,8 +223,8 @@ function viewComplaint(c) {
   const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
   const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
 
-  const location  = locMatch  ? locMatch[1]  : '—';
-  const wasteType = typeMatch ? typeMatch[1] : '—';
+  const location  = c.barangay   || (locMatch  ? locMatch[1]  : '—');
+  const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
   const videoPath = videoMatch ? videoMatch[1].trim() : null;
 
   let description = concernText
