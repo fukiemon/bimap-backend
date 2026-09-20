@@ -1,5 +1,9 @@
 FROM php:8.2-apache
-RUN docker-php-ext-install mysqli pdo pdo_mysql
+
+# Install unzip (needed by Composer) and zip extension dependencies, then PHP extensions
+RUN apt-get update && apt-get install -y unzip libzip-dev \
+    && docker-php-ext-install mysqli pdo pdo_mysql zip \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Composer itself into the image (copied from the official Composer image)
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
