@@ -634,7 +634,7 @@ footer {
 
   <div class="nav-actions">
     <a href="index.php?login=1" class="btn-nav-login solid">
-      <i class="fa-solid fa-lock"></i> Admin Login
+      <i class="fa-solid fa-lock"></i> Login
     </a>
   </div>
 
