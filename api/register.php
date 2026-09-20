@@ -14,14 +14,16 @@
 //          { success: true, pending_approval: true, user } for drivers.
 //
 // CHANGES FROM YOUR ORIGINAL:
-//  - Now requires that the submitted email/phone has a completed OTP
-//    verification on file (via contact_is_verified()) before the account
-//    is created. Previously the OTP endpoints existed but register.php
-//    never checked them, so the whole verification step could be skipped.
-//  - Requires verification_helpers.php for that check.
+//  - Requires a completed OTP verification (via contact_is_verified()) for
+//    the submitted email/phone before the account is created — applies to
+//    BOTH residents and drivers, since OTP confirms contact ownership and
+//    admin approval (driver-only) confirms license/identity — different
+//    checks, both worth keeping.
+//  - Require path fixed: verification_helpers.php lives flat in api/,
+//    right next to this file — no 'includes/' subfolder inside api/.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
-require_once __DIR__ . '/includes/verification_helpers.php';
+require_once __DIR__ . '/verification_helpers.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_error('Method not allowed. Use POST.', 405);
@@ -80,7 +82,7 @@ if ($userType === 'resident') {
         json_error('An account with that email or phone already exists.', 409);
     }
 
-    // NEW: require a completed OTP verification for whichever contact was
+    // Require a completed OTP verification for whichever contact was
     // submitted. $contact must match, character-for-character, whatever
     // string the app sent to send_verification.php / verify_code.php.
     $contact = $email !== '' ? $email : $phone;
@@ -126,7 +128,8 @@ if ($userType === 'resident') {
         json_error('An account with that email or phone already exists.', 409);
     }
 
-    // NEW: same OTP requirement as residents, above.
+    // Same OTP requirement as residents, above — confirms contact ownership;
+    // admin approval below separately confirms license/identity.
     $contact = $email !== '' ? $email : $phone;
     if (!contact_is_verified($conn, $contact)) {
         json_error('Please verify your email or phone number before registering.', 403);
