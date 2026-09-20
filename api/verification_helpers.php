@@ -1,23 +1,29 @@
 <?php
 /**
  * Shared helpers for the OTP verification flow.
- * Include this from send_verification.php, verify_code.php, register.php.
+ * Lives flat in api/ alongside register.php, send_verification.php, and
+ * verify_code.php — include it from those as:
+ *   require_once __DIR__ . '/verification_helpers.php';
  *
  * Requires PHPMailer for email sending:
  *   composer require phpmailer/phpmailer
  *
- * Fill in your real credentials in config.php (see below) — never commit
- * real secrets to GitHub. Use environment variables on Render instead
- * (Render → your service → Environment tab) and read them with getenv().
+ * Fill in your real credentials in api/config.php (sibling file) — never
+ * commit real secrets to GitHub. Use environment variables on Render
+ * instead (Render → your service → Environment tab) and read them with
+ * getenv().
  *
  * CHANGES FROM YOUR ORIGINAL:
  *  - Added contact_is_verified() so register.php can require a completed
- *    OTP step before creating an account (it previously didn't check this
- *    at all).
+ *    OTP step before creating an account.
+ *  - Vendor path adjusted to '/../vendor/autoload.php', assuming
+ *    Composer's vendor/ folder sits at the project root (one level above
+ *    api/). If your composer.json instead lives inside api/, change this
+ *    to '/vendor/autoload.php' with no '..'.
  */
 
 require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/../../vendor/autoload.php'; // PHPMailer, via composer
+require_once __DIR__ . '/../vendor/autoload.php'; // PHPMailer, via composer
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -81,8 +87,8 @@ function store_verification_code(mysqli $conn, string $contact, string $type, st
 }
 
 /**
- * NEW: Check whether a contact has a completed, still-fresh OTP verification
- * on file for the given purpose. register.php calls this before creating an
+ * Check whether a contact has a completed, still-fresh OTP verification on
+ * file for the given purpose. register.php calls this before creating an
  * account so the OTP step can't be skipped.
  *
  * $valid_for_minutes controls how long a completed verification stays usable
