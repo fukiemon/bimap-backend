@@ -8,12 +8,14 @@
  *
  * CHANGES FROM YOUR ORIGINAL:
  *  - The "already registered" check queried a `users` table that doesn't
- *    exist in this schema — your accounts live in separate `resident` and
+ *    exist in this schema — accounts live in separate `resident` and
  *    `driver` tables. Now checks both.
+ *  - Require path fixed: verification_helpers.php lives flat in api/,
+ *    right next to this file — no 'includes/' subfolder inside api/.
  */
 
 require_once __DIR__ . '/../includes/db.php';
-require_once __DIR__ . '/includes/verification_helpers.php';
+require_once __DIR__ . '/verification_helpers.php';
 
 $input = json_decode(file_get_contents('php://input'), true);
 $contact = trim($input['contact'] ?? '');
