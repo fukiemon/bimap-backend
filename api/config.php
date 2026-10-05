@@ -1,14 +1,17 @@
 <?php
 // api/config.php
 //
-// Delete the old "cofig.php" typo file once this one is in place — a stray
-// misspelled file won't be required by anything, but it's confusing to
-// leave around.
-//
-// Local placeholders below — on Render, set these three as real
-// Environment Variables instead (Render → your service → Environment tab)
-// and let getenv() pick them up, so you never commit real secrets to GitHub.
+// On Render, set these as Environment Variables (Render > your service > Environment)
+// so real secrets are never committed to GitHub.
 
-define('MAIL_USERNAME', getenv('MAIL_USERNAME') ?: 'yourgmail@gmail.com');
-define('MAIL_APP_PASSWORD', getenv('MAIL_APP_PASSWORD') ?: 'your-16-char-app-password');
-define('SEMAPHORE_API_KEY', getenv('SEMAPHORE_API_KEY') ?: 'your-semaphore-key');
+// Brevo SMTP login (looks like xxxx@smtp-brevo.com)
+define('MAIL_USERNAME', getenv('MAIL_USERNAME') ?: 'your-brevo-login@smtp-brevo.com');
+
+// Brevo SMTP key
+define('MAIL_APP_PASSWORD', getenv('MAIL_APP_PASSWORD') ?: 'your-brevo-smtp-key');
+
+// The sender address you verified in Brevo (shown as "From" on the emails)
+define('MAIL_FROM', getenv('MAIL_FROM') ?: 'yourgmail@gmail.com');
+
+// Semaphore SMS (unused for now, safe to leave)
+define('SEMAPHORE_API_KEY', getenv('SEMAPHORE_API_KEY') ?: '');
