@@ -1,25 +1,7 @@
 <?php
 /**
  * Shared helpers for the OTP verification flow.
- * Lives flat in api/ alongside register.php, send_verification.php, and
- * verify_code.php — include it from those as:
- *   require_once __DIR__ . '/verification_helpers.php';
- *
- * Requires PHPMailer for email sending:
- *   composer require phpmailer/phpmailer
- *
- * Fill in your real credentials in api/config.php (sibling file) — never
- * commit real secrets to GitHub. Use environment variables on Render
- * instead (Render → your service → Environment tab) and read them with
- * getenv().
- *
- * CHANGES FROM YOUR ORIGINAL:
- *  - Added contact_is_verified() so register.php can require a completed
- *    OTP step before creating an account.
- *  - Vendor path adjusted to '/../vendor/autoload.php', assuming
- *    Composer's vendor/ folder sits at the project root (one level above
- *    api/). If your composer.json instead lives inside api/, change this
- *    to '/vendor/autoload.php' with no '..'.
+ * Email is sent through Brevo SMTP (port 2525, which Render allows).
  */
 
 require_once __DIR__ . '/config.php';
@@ -28,10 +10,6 @@ require_once __DIR__ . '/../vendor/autoload.php'; // PHPMailer, via composer
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
-/**
- * Decide whether the submitted contact string is an email or a PH mobile number.
- * Returns 'email', 'sms', or null if it matches neither.
- */
 function detect_contact_type(string $contact): ?string
 {
     $contact = trim($contact);
@@ -40,7 +18,6 @@ function detect_contact_type(string $contact): ?string
         return 'email';
     }
 
-    // Accepts 09XXXXXXXXX, +639XXXXXXXXX, or 639XXXXXXXXX (PH mobile formats)
     if (preg_match('/^(?:\+?63|0)9\d{9}$/', preg_replace('/[\s\-]/', '', $contact))) {
         return 'sms';
     }
@@ -48,19 +25,16 @@ function detect_contact_type(string $contact): ?string
     return null;
 }
 
-/**
- * Normalize a PH mobile number to the 63XXXXXXXXXX format Semaphore expects.
- */
 function normalize_ph_number(string $number): string
 {
     $number = preg_replace('/[\s\-]/', '', $number);
     if (str_starts_with($number, '+63')) {
-        return substr($number, 1); // drop the +
+        return substr($number, 1);
     }
     if (str_starts_with($number, '0')) {
         return '63' . substr($number, 1);
     }
-    return $number; // already 63XXXXXXXXXX
+    return $number;
 }
 
 function generate_otp_code(): string
@@ -68,10 +42,6 @@ function generate_otp_code(): string
     return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 }
 
-/**
- * Insert a fresh OTP row for this contact, invalidating any earlier unverified
- * codes for the same contact + purpose so old codes can't still be used.
- */
 function store_verification_code(mysqli $conn, string $contact, string $type, string $code, string $purpose = 'registration', int $ttl_minutes = 10): void
 {
     $stmt = $conn->prepare("DELETE FROM verification_codes WHERE contact = ? AND purpose = ? AND verified_at IS NULL");
@@ -86,16 +56,6 @@ function store_verification_code(mysqli $conn, string $contact, string $type, st
     $stmt->execute();
 }
 
-/**
- * Check whether a contact has a completed, still-fresh OTP verification on
- * file for the given purpose. register.php calls this before creating an
- * account so the OTP step can't be skipped.
- *
- * $valid_for_minutes controls how long a completed verification stays usable
- * for registration after the code was confirmed — long enough to fill out
- * the rest of the signup form, short enough that a stale verification can't
- * be replayed much later. Adjust to taste.
- */
 function contact_is_verified(mysqli $conn, string $contact, string $purpose = 'registration', int $valid_for_minutes = 30): bool
 {
     $stmt = $conn->prepare(
@@ -111,23 +71,24 @@ function contact_is_verified(mysqli $conn, string $contact, string $purpose = 'r
 }
 
 /**
- * Send the OTP by email using PHPMailer + Gmail SMTP.
- * Set MAIL_USERNAME / MAIL_APP_PASSWORD as environment variables on Render
- * (use a Gmail "App Password", not your normal Gmail password).
+ * Send the OTP by email using PHPMailer + Brevo SMTP.
+ * MAIL_USERNAME     = Brevo SMTP login (xxxx@smtp-brevo.com)
+ * MAIL_APP_PASSWORD = Brevo SMTP key
+ * MAIL_FROM         = your verified sender (Gmail verified in Brevo)
  */
 function send_email_otp(string $toEmail, string $code): bool
 {
     $mail = new PHPMailer(true);
     try {
         $mail->isSMTP();
-        $mail->Host       = 'smtp.gmail.com';
+        $mail->Host       = 'smtp-relay.brevo.com';
         $mail->SMTPAuth   = true;
         $mail->Username   = MAIL_USERNAME;
         $mail->Password   = MAIL_APP_PASSWORD;
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port       = 587;
+        $mail->Port       = 2525;
 
-        $mail->setFrom(MAIL_USERNAME, 'BiMAP');
+        $mail->setFrom(MAIL_FROM, 'BiMAP');
         $mail->addAddress($toEmail);
 
         $mail->isHTML(true);
@@ -144,8 +105,7 @@ function send_email_otp(string $toEmail, string $code): bool
 }
 
 /**
- * Send the OTP by SMS using Semaphore (https://semaphore.co).
- * Set SEMAPHORE_API_KEY as an environment variable on Render.
+ * SMS via Semaphore. Not usable without credits, kept for later.
  */
 function send_sms_otp(string $toNumber, string $code): bool
 {
@@ -160,7 +120,6 @@ function send_sms_otp(string $toNumber, string $code): bool
             'apikey'  => SEMAPHORE_API_KEY,
             'number'  => $number,
             'message' => $message,
-            // 'sendername' => 'BIMAP', // only if you've registered a sender name with Semaphore
         ]),
     ]);
 
