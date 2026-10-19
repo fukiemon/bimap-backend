@@ -1,0 +1,67 @@
+<?php
+// GET /api/get_truck_location.php
+//   -> the garbage truck(s) whose driver is assigned to THIS resident's barangay.
+//
+// Response: {"success":true,"trucks":[{driver_name, barangay, latitude, longitude,
+//            is_tracking, age_seconds, updated_at}]}
+//
+// age_seconds is calculated by the database (NOW() - updated_at) so server timezone
+// differences can't make a fresh location look old. The app uses it for the
+// "Location may be outdated" banner.
+//
+// Requires: Authorization: Bearer <token> (resident)
+
+require_once __DIR__ . '/../includes/api_helpers.php';
+
+$auth = require_auth();
+if ($auth['user_type'] !== 'resident') {
+    json_error('Only residents can use this endpoint.', 403);
+}
+$residentId = (int) $auth['user_id'];
+
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    json_error('Method not allowed. Use GET.', 405);
+}
+
+// Find the resident's barangay.
+$stmt = $conn->prepare("SELECT barangay FROM resident WHERE id = ?");
+$stmt->bind_param('i', $residentId);
+$stmt->execute();
+$resident = $stmt->get_result()->fetch_assoc();
+$barangay = trim($resident['barangay'] ?? '');
+
+if ($barangay === '') {
+    json_ok(['trucks' => []]);
+}
+
+// Trucks for that barangay. Only the driver's first name is exposed.
+$stmt = $conn->prepare(
+    "SELECT d.first_name,
+            d.assigned_barangay,
+            dl.latitude,
+            dl.longitude,
+            dl.is_tracking,
+            dl.updated_at,
+            TIMESTAMPDIFF(SECOND, dl.updated_at, NOW()) AS age_seconds
+     FROM driver_location dl
+     JOIN driver d ON d.id = dl.driver_id
+     WHERE d.assigned_barangay = ?
+     ORDER BY dl.updated_at DESC"
+);
+$stmt->bind_param('s', $barangay);
+$stmt->execute();
+$rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+$trucks = array_map(function ($r) {
+    return [
+        'driver_name' => $r['first_name'],
+        'barangay'    => $r['assigned_barangay'],
+        'latitude'    => (float) $r['latitude'],
+        'longitude'   => (float) $r['longitude'],
+        'is_tracking' => (bool) $r['is_tracking'],
+        'age_seconds' => (int) $r['age_seconds'],
+        'updated_at'  => $r['updated_at'],
+    ];
+}, $rows);
+
+json_ok(['trucks' => $trucks]);
