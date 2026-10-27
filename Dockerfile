@@ -1,5 +1,4 @@
-FROM php:8.2-apache
-
+FROM php:8.2.35-apache
 # Install unzip (needed by Composer) and zip extension dependencies, then PHP extensions
 RUN apt-get update && apt-get install -y unzip libzip-dev \
     && docker-php-ext-install mysqli pdo pdo_mysql zip \
