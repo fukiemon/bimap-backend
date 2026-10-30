@@ -7,12 +7,15 @@
 // A resident sees the truck if their barangay is anywhere in that list
 // (not case-sensitive).
 //
-// Response: {"success":true,"trucks":[{driver_name, barangay, latitude, longitude,
-//            is_tracking, age_seconds, updated_at}]}
+// Response: {"success":true,"trucks":[{truck_id, driver_name, barangay, latitude,
+//            longitude, is_tracking, age_seconds, updated_at}]}
+//
+// truck_id is the driver's id. The app uses it to tell trucks apart so each
+// marker can glide smoothly (first names are not unique).
 //
 // age_seconds is calculated by the database (NOW() - updated_at) so server timezone
 // differences can't make a fresh location look old. The app uses it for the
-// "Location may be outdated" banner.
+// "Offline / outdated" state.
 //
 // Requires: Authorization: Bearer <token> (resident)
 
@@ -42,7 +45,8 @@ if ($barangay === '') {
 // Trucks whose driver covers that barangay. Only the driver's first name is exposed.
 // The REPLACEs remove spaces around the commas so "A, B , C" still matches.
 $stmt = $conn->prepare(
-    "SELECT d.first_name,
+    "SELECT dl.driver_id,
+            d.first_name,
             d.assigned_barangay,
             dl.latitude,
             dl.longitude,
@@ -63,6 +67,7 @@ $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 $trucks = array_map(function ($r) {
     return [
+        'truck_id'    => (string) $r['driver_id'],
         'driver_name' => $r['first_name'],
         'barangay'    => $r['assigned_barangay'],
         'latitude'    => (float) $r['latitude'],
