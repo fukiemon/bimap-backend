@@ -40,30 +40,44 @@ if (isset($conn)) {
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Nunito', sans-serif; background: #f0f4f8; color: #1a1a2e; display: flex; flex-direction: column; min-height: 100vh; }
   
-  /* TOP BAR */
+  /* TOP BAR
+     Fixed 30px tall and sticky, so the sidebar below can always fill the rest
+     of the screen with blue (no white gap when the page is scrolled). */
   .topbar {
     background: #1a1a2e;
     color: white;
-    padding: 6px 24px;
+    height: 30px;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.5px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
   }
 
   /* MAIN LAYOUT */
   .layout { display: flex; flex: 1; }
 
-  /* SIDEBAR */
+  /* SIDEBAR
+     Sticks right under the top bar and is exactly as tall as the rest of the
+     screen, so it is always fully blue. If the menu is ever taller than the
+     screen, it scrolls inside itself (scrollbar hidden). */
   .sidebar {
     width: 170px;
     background: linear-gradient(180deg, #1a73e8 0%, #0d47a1 100%);
-    min-height: calc(100vh - 30px);
     display: flex;
     flex-direction: column;
     position: sticky;
-    top: 0;
+    top: 30px;
     height: calc(100vh - 30px);
+    flex-shrink: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
   }
+  .sidebar::-webkit-scrollbar { display: none; }
   .sidebar-logo {
     padding: 18px 16px 12px;
     border-bottom: 1px solid rgba(255,255,255,0.15);
@@ -87,7 +101,7 @@ if (isset($conn)) {
   .sidebar-nav { flex: 1; padding: 8px 0; }
   .nav-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 16px;
+    padding: 10px 16px;
     color: rgba(255,255,255,0.8);
     text-decoration: none;
     font-size: 14px;
@@ -117,7 +131,7 @@ if (isset($conn)) {
   .nav-logout { margin-top: auto; border-top: 1px solid rgba(255,255,255,0.15); }
 
   /* MAIN CONTENT */
-  .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
   /* HEADER */
   .page-header {
@@ -379,6 +393,10 @@ if (isset($conn)) {
       <a href="schedule.php" class="nav-item <?= ($active_nav??'') === 'schedule' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>
         Schedule
+      </a>
+      <a href="feedback.php" class="nav-item <?= ($active_nav??'') === 'feedback' ? 'active' : '' ?>">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
+        Feedback
       </a>
       <a href="settings.php" class="nav-item <?= ($active_nav??'') === 'settings' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
