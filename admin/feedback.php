@@ -2,355 +2,371 @@
 session_start();
 require_once '../includes/db.php';
 
-$page_title = 'Collection Feedback';
-$active_nav = 'feedback';
+$page_title = 'Admin Dashboard';
+$active_nav = 'dashboard';
 
-/* ------------------------------------------------------------------
-   CONFIG
-   APP_TZ = the timezone the admin sees ("Today" follows this one).
-   DB_TZ  = the timezone your database stores feedback.created_at in.
-            Render databases are normally 'UTC'. If you find the saved
-            times already match Philippine time, change this to 'Asia/Manila'.
-------------------------------------------------------------------- */
-$APP_TZ   = 'Asia/Manila';
-$DB_TZ    = 'UTC';
-$PER_PAGE = 20;
+if (isset($_POST['resolve_id'])) {
+    $id = (int)$_POST['resolve_id'];
+    $notes = trim($_POST['admin_notes'] ?? '');
 
-/* ---------- helpers ---------- */
-function valid_date($s) {
-    $d = DateTime::createFromFormat('Y-m-d', (string)$s);
-    return $d && $d->format('Y-m-d') === $s;
-}
-// local day start (Y-m-d) -> DB timezone datetime string
-function to_db($localDate, $appTz, $dbTz) {
-    $d = new DateTime($localDate . ' 00:00:00', new DateTimeZone($appTz));
-    $d->setTimezone(new DateTimeZone($dbTz));
-    return $d->format('Y-m-d H:i:s');
-}
-// DB datetime string -> local display string
-function to_local($dbTime, $appTz, $dbTz) {
-    $d = new DateTime($dbTime, new DateTimeZone($dbTz));
-    $d->setTimezone(new DateTimeZone($appTz));
-    return $d->format('M d, Y · g:i A');
-}
-// run a prepared SELECT and return all rows
-function fetch_rows($conn, $sql, $types = '', $params = []) {
-    $stmt = $conn->prepare($sql);
-    if ($types !== '') {
-        $stmt->bind_param($types, ...$params);
-    }
+    $stmt = $conn->prepare("UPDATE complaint SET status='Resolved', admin_notes=? WHERE id=?");
+    $stmt->bind_param("si", $notes, $id);
     $stmt->execute();
-    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-}
 
-/* ---------- date range ---------- */
-$tz        = new DateTimeZone($APP_TZ);
-$now       = new DateTime('now', $tz);
-$today     = $now->format('Y-m-d');
-$yesterday = (clone $now)->modify('-1 day')->format('Y-m-d');
-$week_from = (clone $now)->modify('-6 days')->format('Y-m-d');
-$month_from = $now->format('Y-m-01');
+    $stmt2 = $conn->prepare("SELECT resident_name FROM complaint WHERE id=?");
+    $stmt2->bind_param("i", $id);
+    $stmt2->execute();
+    $complaint = $stmt2->get_result()->fetch_assoc();
 
-$range = $_GET['range'] ?? '';
-if ($range === 'today') {
-    $from = $to = $today;
-} elseif ($range === 'yesterday') {
-    $from = $to = $yesterday;
-} elseif ($range === '7days') {
-    $from = $week_from; $to = $today;
-} elseif ($range === 'month') {
-    $from = $month_from; $to = $today;
-} else {
-    $from = $_GET['from'] ?? '';
-    $to   = $_GET['to']   ?? '';
-    if (!valid_date($from) && !valid_date($to)) {
-        $from = $to = $today;              // default: today
-    } else {
-        if (!valid_date($from)) $from = $to;
-        if (!valid_date($to))   $to   = $from;
+    if ($complaint) {
+        $action = $complaint['resident_name'] . " Complaint was resolved";
+        $stmt3 = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
+        $stmt3->bind_param("s", $action);
+        $stmt3->execute();
     }
-}
-if ($from > $to) { [$from, $to] = [$to, $from]; }
 
-// range is [start, end) in DB time so created_at can use its index
-$start = to_db($from, $APP_TZ, $DB_TZ);
-$end   = to_db((new DateTime($to, $tz))->modify('+1 day')->format('Y-m-d'), $APP_TZ, $DB_TZ);
-
-/* ---------- other filters ---------- */
-$barangay = trim($_GET['barangay'] ?? '');
-$tab      = (($_GET['tab'] ?? 'no') === 'yes') ? 'yes' : 'no';
-$page     = max(1, (int)($_GET['page'] ?? 1));
-
-$barangays = fetch_rows($conn,
-    "SELECT DISTINCT barangay FROM feedback WHERE barangay IS NOT NULL AND barangay <> '' ORDER BY barangay");
-
-/* ---------- stat cards (date range + barangay filter) ---------- */
-$where  = "created_at >= ? AND created_at < ?";
-$types  = "ss";
-$params = [$start, $end];
-if ($barangay !== '') {
-    $where  .= " AND barangay = ?";
-    $types  .= "s";
-    $params[] = $barangay;
+    $_SESSION['success'] = 'Complaint marked as resolved.';
+    header("Location: dashboard.php");
+    exit;
 }
 
-$counts = fetch_rows($conn,
-    "SELECT collected, COUNT(*) AS c FROM feedback WHERE $where GROUP BY collected", $types, $params);
-$yes_total = 0; $no_total = 0;
-foreach ($counts as $row) {
-    if ($row['collected'] === 'yes') $yes_total = (int)$row['c'];
-    if ($row['collected'] === 'no')  $no_total  = (int)$row['c'];
-}
-$total = $yes_total + $no_total;
-$rate  = $total > 0 ? round($yes_total / $total * 100) : 0;
+$total_complaints    = $conn->query("SELECT COUNT(*) as c FROM complaint")->fetch_assoc()['c'] ?? 0;
+$pending_complaints  = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Pending'")->fetch_assoc()['c'] ?? 0;
+$resolved_complaints = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Resolved'")->fetch_assoc()['c'] ?? 0;
+$total_announcements = $conn->query("SELECT COUNT(*) as c FROM announcement")->fetch_assoc()['c'] ?? 0;
 
-/* ---------- by-barangay summary (date range only, so all barangays show) ---------- */
-$by_barangay = fetch_rows($conn,
-    "SELECT barangay,
-            SUM(collected = 'yes') AS yes_c,
-            SUM(collected = 'no')  AS no_c,
-            COUNT(*)               AS total_c
-       FROM feedback
-      WHERE created_at >= ? AND created_at < ?
-        AND barangay IS NOT NULL AND barangay <> ''
-      GROUP BY barangay
-      ORDER BY no_c DESC, total_c DESC, barangay ASC",
-    "ss", [$start, $end]);
-
-/* ---------- list for the active tab ---------- */
-$tab_total = ($tab === 'yes') ? $yes_total : $no_total;
-$pages     = max(1, (int)ceil($tab_total / $PER_PAGE));
-$page      = min($page, $pages);
-$offset    = ($page - 1) * $PER_PAGE;
-
-$list = fetch_rows($conn,
-    "SELECT id, resident_name, barangay, created_at
-       FROM feedback
-      WHERE collected = ? AND $where
-      ORDER BY created_at DESC
-      LIMIT $PER_PAGE OFFSET $offset",
-    "s" . $types, array_merge([$tab], $params));
-
-/* ---------- url helper (keeps filters) ---------- */
-function url_with($overrides = []) {
-    global $from, $to, $barangay, $tab, $page;
-    $q = array_merge([
-        'from' => $from, 'to' => $to, 'barangay' => $barangay,
-        'tab'  => $tab,  'page' => 1,
-    ], $overrides);
-    if ($q['barangay'] === '') unset($q['barangay']);
-    return 'feedback.php?' . http_build_query($q);
-}
-
-$is_today     = ($from === $today      && $to === $today);
-$is_yesterday = ($from === $yesterday  && $to === $yesterday);
-$is_week      = ($from === $week_from  && $to === $today);
-$is_month     = ($from === $month_from && $to === $today);
+$complaints   = $conn->query("SELECT * FROM complaint ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
+$activities   = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
+$announcements = $conn->query("SELECT * FROM announcement ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
 
 include '../includes/admin_header.php';
 ?>
 
-<style>
-  .fb-filters { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
-  .fb-filters .form-group { margin:0; }
-  .fb-filters label { display:block; font-size:12.5px; font-weight:700; margin-bottom:5px; color:#555; }
-  .fb-quick { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-  .fb-quick a { text-decoration:none; }
-  .fb-quick .on { background:#1a73e8; color:#fff; border-color:#1a73e8; }
-  .fb-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:16px; margin-bottom:20px; }
-  .fb-tabs { display:flex; gap:6px; border-bottom:2px solid #e8eef8; margin-bottom:16px; }
-  .fb-tabs a { padding:10px 16px; font-weight:700; font-size:14px; text-decoration:none; color:#667; border-bottom:3px solid transparent; margin-bottom:-2px; }
-  .fb-tabs a.active-no  { color:#c62828; border-color:#c62828; }
-  .fb-tabs a.active-yes { color:#2e7d32; border-color:#2e7d32; }
-  .fb-count { display:inline-block; min-width:22px; padding:1px 8px; margin-left:6px; border-radius:10px; background:#eef2f9; font-size:12px; color:#445; text-align:center; }
-  .fb-flag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11.5px; font-weight:700; background:#ffebee; color:#c62828; }
-  .fb-ok   { color:#888; font-size:12px; }
-  .fb-bar  { height:8px; border-radius:4px; background:#fde0e0; overflow:hidden; min-width:90px; }
-  .fb-bar span { display:block; height:100%; background:#43a047; }
-  .fb-empty { text-align:center; padding:36px 10px; color:#889; font-size:14px; }
-  .fb-pager { display:flex; justify-content:space-between; align-items:center; margin-top:16px; font-size:13px; color:#667; }
-  .fb-pager a, .fb-pager span.btn { text-decoration:none; }
-  .fb-scroll { overflow-x:auto; }
-  .fb-scroll-y { max-height:340px; overflow-y:auto; }
-</style>
-
-<!-- FILTERS -->
-<div class="card" style="margin-bottom:20px;">
-  <div class="card-header"><h2>Collection Feedback</h2></div>
-  <div class="card-body">
-    <form method="GET" action="feedback.php">
-      <input type="hidden" name="tab" value="<?= htmlspecialchars($tab) ?>">
-      <div class="fb-filters">
-        <div class="form-group">
-          <label for="from">From</label>
-          <input type="date" id="from" name="from" class="form-control" value="<?= htmlspecialchars($from) ?>">
-        </div>
-        <div class="form-group">
-          <label for="to">To</label>
-          <input type="date" id="to" name="to" class="form-control" value="<?= htmlspecialchars($to) ?>">
-        </div>
-        <div class="form-group">
-          <label for="barangay">Barangay</label>
-          <select id="barangay" name="barangay" class="form-control">
-            <option value="">All barangays</option>
-            <?php foreach ($barangays as $b): ?>
-              <option value="<?= htmlspecialchars($b['barangay']) ?>" <?= $b['barangay'] === $barangay ? 'selected' : '' ?>>
-                <?= htmlspecialchars($b['barangay']) ?>
-              </option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-        <div class="form-group" style="display:flex;gap:8px;">
-          <button type="submit" class="btn btn-primary">Apply</button>
-          <a href="feedback.php" class="btn">Reset</a>
-        </div>
-      </div>
-    </form>
-
-    <div class="fb-quick">
-      <a class="btn btn-sm <?= $is_today ? 'on' : '' ?>"     href="<?= htmlspecialchars(url_with(['range'=>'today','from'=>null,'to'=>null])) ?>">Today</a>
-      <a class="btn btn-sm <?= $is_yesterday ? 'on' : '' ?>" href="<?= htmlspecialchars(url_with(['range'=>'yesterday','from'=>null,'to'=>null])) ?>">Yesterday</a>
-      <a class="btn btn-sm <?= $is_week ? 'on' : '' ?>"      href="<?= htmlspecialchars(url_with(['range'=>'7days','from'=>null,'to'=>null])) ?>">Last 7 days</a>
-      <a class="btn btn-sm <?= $is_month ? 'on' : '' ?>"     href="<?= htmlspecialchars(url_with(['range'=>'month','from'=>null,'to'=>null])) ?>">This month</a>
-    </div>
-  </div>
-</div>
+<?php if (isset($_SESSION['success'])): ?>
+    <div class="alert alert-success"><?= htmlspecialchars($_SESSION['success']) ?></div>
+    <?php unset($_SESSION['success']); ?>
+<?php endif; ?>
 
 <!-- STATS -->
-<div class="fb-grid">
+<div class="stats-grid">
   <div class="stat-card">
     <div class="stat-icon" style="background:#e3f2fd;">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="#1a73e8"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#1a73e8"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
     </div>
-    <div class="stat-info"><div class="num"><?= $total ?></div><div class="lbl">Total Responses</div></div>
+    <div class="stat-info">
+      <div class="num"><?= $total_complaints ?></div>
+      <div class="lbl">Total Complaints</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#fff8e1;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#f9a825"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
+    </div>
+    <div class="stat-info">
+      <div class="num"><?= $pending_complaints ?></div>
+      <div class="lbl">Pending Complaints</div>
+    </div>
   </div>
   <div class="stat-card">
     <div class="stat-icon" style="background:#e8f5e9;">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="#2e7d32"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
     </div>
-    <div class="stat-info"><div class="num"><?= $yes_total ?></div><div class="lbl">Collected (Yes)</div></div>
+    <div class="stat-info">
+      <div class="num"><?= $resolved_complaints ?></div>
+      <div class="lbl">Resolved Complaints</div>
+    </div>
   </div>
   <div class="stat-card">
-    <div class="stat-icon" style="background:#ffebee;">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="#c62828"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    <div class="stat-icon" style="background:#fce4ec;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#c2185b"><path d="M18 11v2H6v-2H4v2c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-2h-2zM12 2L6.5 8H10v7h4V8h3.5L12 2z"/></svg>
     </div>
-    <div class="stat-info"><div class="num"><?= $no_total ?></div><div class="lbl">Not Collected (No)</div></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:#fff8e1;">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="#f9a825"><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>
+    <div class="stat-info">
+      <div class="num"><?= $total_announcements ?></div>
+      <div class="lbl">Total Announcements</div>
     </div>
-    <div class="stat-info"><div class="num"><?= $rate ?>%</div><div class="lbl">Collection Rate</div></div>
   </div>
 </div>
 
-<!-- BY BARANGAY -->
-<div class="card" style="margin-bottom:20px;">
-  <div class="card-header"><h2>By Barangay</h2></div>
-  <div class="card-body">
-    <?php if (!$by_barangay): ?>
-      <div class="fb-empty">No feedback in this date range.</div>
-    <?php else: ?>
-    <div class="fb-scroll fb-scroll-y">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Barangay</th>
-            <th>Yes</th>
-            <th>No</th>
-            <th>Total</th>
-            <th>Collection Rate</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($by_barangay as $r):
-            $y = (int)$r['yes_c']; $n = (int)$r['no_c']; $t = (int)$r['total_c'];
-            $pct = $t > 0 ? round($y / $t * 100) : 0;
-            $review = ($n >= 3 && ($n / $t) >= 0.30);
-          ?>
-          <tr>
-            <td style="font-weight:700;">
-              <a href="<?= htmlspecialchars(url_with(['barangay' => $r['barangay'], 'tab' => 'no'])) ?>"
-                 style="color:inherit;text-decoration:none;"><?= htmlspecialchars($r['barangay']) ?></a>
-            </td>
-            <td><?= $y ?></td>
-            <td><strong><?= $n ?></strong></td>
-            <td><?= $t ?></td>
-            <td>
-              <div style="display:flex;align-items:center;gap:8px;">
-                <div class="fb-bar" style="flex:1;"><span style="width:<?= $pct ?>%;"></span></div>
-                <span style="font-size:12.5px;min-width:36px;"><?= $pct ?>%</span>
-              </div>
-            </td>
-            <td><?= $review ? '<span class="fb-flag">Needs review</span>' : '<span class="fb-ok">OK</span>' ?></td>
-          </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    </div>
-    <?php endif; ?>
-  </div>
-</div>
+<!-- COMPLAINTS + ACTIVITIES -->
+<div style="display:grid;grid-template-columns:1fr 380px;gap:20px;margin-bottom:20px;">
 
-<!-- YES / NO LISTS -->
-<div class="card">
-  <div class="card-body">
-    <div class="fb-tabs">
-      <a href="<?= htmlspecialchars(url_with(['tab'=>'no'])) ?>"  class="<?= $tab === 'no'  ? 'active-no'  : '' ?>">Not Collected<span class="fb-count"><?= $no_total ?></span></a>
-      <a href="<?= htmlspecialchars(url_with(['tab'=>'yes'])) ?>" class="<?= $tab === 'yes' ? 'active-yes' : '' ?>">Collected<span class="fb-count"><?= $yes_total ?></span></a>
+  <!-- Recent Complaints -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Recent Complaints</h2>
+      <a href="complaints.php" class="btn btn-primary btn-sm">View All Complaints</a>
     </div>
-
-    <?php if (!$list): ?>
-      <div class="fb-empty">
-        <?= $tab === 'no' ? 'No "not collected" reports for this range.' : 'No "collected" confirmations for this range.' ?>
-      </div>
-    <?php else: ?>
-    <div class="fb-scroll">
+    <div class="card-body">
       <table class="data-table">
         <thead>
           <tr>
             <th>#</th>
+            <th>Status</th>
             <th>Resident</th>
-            <th>Barangay</th>
-            <th>Answer</th>
-            <th>Date &amp; Time</th>
+            <th>Location</th>
+            <th>Waste Type</th>
+            <th>Date</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($list as $f): ?>
+          <?php foreach ($complaints as $c):
+            // barangay and waste_type are real columns on `complaint` now —
+            // no need to regex-parse them back out of the free-text concern
+            // field the way this table used to. Concern text (and any photo/
+            // video attached to it) still shows in the View modal below.
+            $location   = !empty($c['barangay']) ? $c['barangay'] : 'Not specified';
+            $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : '—';
+          ?>
           <tr>
-            <td><strong>#<?= (int)$f['id'] ?></strong></td>
-            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($f['resident_name'] ?: 'Unknown Resident') ?></td>
-            <td style="font-size:13.5px;"><?= htmlspecialchars($f['barangay'] ?: 'Not specified') ?></td>
+            <td><strong>#<?= htmlspecialchars($c['id'] ?? '—') ?></strong></td>
             <td>
-              <span class="badge <?= $tab === 'no' ? 'badge-pending' : 'badge-resolved' ?>">
-                <?= $tab === 'no' ? 'No' : 'Yes' ?>
+              <span class="badge <?= ($c['status'] ?? 'Pending') === 'Pending' ? 'badge-pending' : 'badge-resolved' ?>">
+                <?= htmlspecialchars($c['status'] ?? 'Pending') ?>
               </span>
             </td>
-            <td style="font-size:13px;color:#555;white-space:nowrap;"><?= htmlspecialchars(to_local($f['created_at'], $APP_TZ, $DB_TZ)) ?></td>
+            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($c['resident_name'] ?? 'Unknown Resident') ?></td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($location) ?></td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($waste_type) ?></td>
+            <td style="font-size:13px;color:#555;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c)) ?>)">View</button>
+              <?php if (($c['status'] ?? '') === 'Pending'): ?>
+                <button class="btn btn-sm btn-success" style="margin-left:4px;"
+                        onclick="resolveComplaint(<?= $c['id'] ?>, '<?= htmlspecialchars(addslashes($c['resident_name'] ?? 'Resident')) ?>')">
+                  Resolve
+                </button>
+              <?php endif; ?>
+            </td>
           </tr>
           <?php endforeach; ?>
         </tbody>
       </table>
     </div>
+  </div>
 
-    <div class="fb-pager">
-      <div>
-        Showing <?= $offset + 1 ?>–<?= $offset + count($list) ?> of <?= $tab_total ?>
+  <!-- Recent Activities -->
+  <div class="card">
+    <div class="card-header"><h2>Recent Activities</h2></div>
+    <div class="card-body">
+      <?php foreach ($activities as $a): ?>
+      <div class="activity-item">
+        <div class="activity-bell">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#1a73e8"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        </div>
+        <div style="flex:1">
+          <div class="activity-text"><?= htmlspecialchars($a['action'] ?? 'System activity') ?></div>
+          <div class="activity-time"><?= timeAgo($a['created_at'] ?? date('Y-m-d H:i:s')) ?></div>
+        </div>
+        <a href="complaints.php" class="btn-view">View →</a>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <?php if ($page > 1): ?>
-          <a class="btn btn-sm" href="<?= htmlspecialchars(url_with(['page' => $page - 1])) ?>">Previous</a>
-        <?php endif; ?>
-        <span>Page <?= $page ?> of <?= $pages ?></span>
-        <?php if ($page < $pages): ?>
-          <a class="btn btn-sm" href="<?= htmlspecialchars(url_with(['page' => $page + 1])) ?>">Next</a>
-        <?php endif; ?>
-      </div>
+      <?php endforeach; ?>
     </div>
-    <?php endif; ?>
   </div>
 </div>
+
+<!-- ANNOUNCEMENTS -->
+<div class="card">
+  <div class="card-header">
+    <h2>Recent Announcements</h2>
+    <button class="btn btn-primary btn-sm" onclick="openAnnouncementModal()">+ Create Announcement</button>
+  </div>
+  <div class="card-body">
+    <?php foreach ($announcements as $ann): ?>
+    <div class="activity-item">
+      <div class="activity-bell" style="background:#fff3e0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#f57c00"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+      </div>
+      <div style="flex:1">
+        <div class="activity-text"><?= htmlspecialchars($ann['title'] ?? 'Untitled') ?></div>
+        <div class="activity-time"><?= htmlspecialchars(substr($ann['message'] ?? '', 0, 65)) ?>...</div>
+        <div style="margin-top:3px;">
+          <span class="badge badge-<?= $ann['target_audience'] ?? 'all' ?>">
+            <?= ucfirst($ann['target_audience'] ?? 'all') ?>
+          </span>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#aaa;text-align:right;">
+        <?= timeAgo($ann['created_at'] ?? date('Y-m-d H:i:s')) ?>
+      </div>
+    </div>
+    <?php endforeach; ?>
+  </div>
+</div>
+
+<!-- VIEW COMPLAINT MODAL -->
+<div class="modal-overlay" id="viewModal">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-header" id="viewModalTitle">Complaint Details</div>
+    <div class="modal-body" id="viewModalBody" style="max-height:75vh;overflow-y:auto;"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn" onclick="closeViewModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- RESOLVE MODAL -->
+<div class="modal-overlay" id="resolveModal">
+  <div class="modal">
+    <div class="modal-header">Resolve Complaint</div>
+    <form method="POST">
+      <div class="modal-body">
+        <p style="margin-bottom:16px;font-size:14px;">Resolving complaint from <strong id="resolveName"></strong>.</p>
+        <input type="hidden" name="resolve_id" id="resolveId">
+        <div class="form-group">
+          <label>Admin Notes (optional)</label>
+          <textarea name="admin_notes" class="form-control" placeholder="Add notes about resolution..." rows="4"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeResolveModal()">Cancel</button>
+        <button type="submit" class="btn btn-success">Mark as Resolved</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ANNOUNCEMENT MODAL -->
+<div class="modal-overlay" id="announcementModal">
+  <div class="modal">
+    <div class="modal-header">Create Announcement</div>
+    <form method="POST" action="announcements.php">
+      <div class="modal-body">
+        <div id="modalAlert"></div>
+        <div class="form-group">
+          <label>Title <span class="req">*</span></label>
+          <input type="text" name="title" class="form-control" placeholder="Enter announcement title..." required>
+        </div>
+        <div class="form-group">
+          <label>Message <span class="req">*</span></label>
+          <textarea name="message" class="form-control" placeholder="Enter announcement message..." required></textarea>
+        </div>
+        <div class="form-group">
+          <label>Target Audience</label>
+          <div class="radio-group">
+            <label class="radio-label"><input type="radio" name="target_audience" value="residents"> All Residents</label>
+            <label class="radio-label"><input type="radio" name="target_audience" value="drivers"> All Drivers</label>
+            <label class="radio-label"><input type="radio" name="target_audience" value="all" checked> All Users</label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeAnnouncementModal()">Cancel</button>
+        <button type="submit" name="create_announcement" class="btn btn-primary">Publish Announcement</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function viewComplaint(c) {
+  const concernText = c.concern || '';
+
+  const locMatch   = concernText.match(/\[Location:\s*([^\]]+)\]/i);
+  const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
+  const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
+
+  const location  = c.barangay || (locMatch ? locMatch[1] : '—');
+  const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
+  const videoPath = videoMatch ? videoMatch[1].trim() : null;
+
+  let description = concernText
+    .replace(/\[Location:[^\]]*\]\s*/i, '')
+    .replace(/\[Type:[^\]]*\]\s*/i, '')
+    .replace(/\[Video:[^\]]*\]\s*/i, '')
+    .trim();
+
+  // Photo HTML
+  let photoHTML = '';
+  if (c.photo && c.photo.trim() !== '') {
+    photoHTML = `
+      <div style="margin:15px 0;">
+        <strong>📷 Attached Photo:</strong><br>
+        <img src="../${c.photo}"
+             style="max-width:100%;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
+             onclick="window.open('../${c.photo}', '_blank')"
+             alt="Complaint Photo">
+      </div>`;
+  }
+
+  // Video HTML
+  let videoHTML = '';
+  if (videoPath) {
+    videoHTML = `
+      <div style="margin:15px 0;">
+        <strong>🎥 Attached Video:</strong><br>
+        <video controls playsinline
+               style="max-width:100%;width:100%;border-radius:10px;border:2px solid #ede9fe;margin-top:8px;background:#000;">
+          <source src="../${videoPath}">
+          Your browser does not support the video tag.
+        </video>
+        <div style="margin-top:6px;">
+          <a href="../${videoPath}" target="_blank" download
+             style="font-size:12px;color:#7c3aed;font-weight:700;text-decoration:none;">
+            ⬇️ Download Video
+          </a>
+        </div>
+      </div>`;
+  }
+
+  document.getElementById('viewModalTitle').textContent = `Complaint #${c.id} — ${c.status}`;
+
+  document.getElementById('viewModalBody').innerHTML = `
+    <div style="display:grid;gap:14px;line-height:1.6;">
+      <div><strong>Resident:</strong> ${c.resident_name} (${c.resident_phone || '—'})</div>
+      <div><strong>Location:</strong> ${location}</div>
+      <div><strong>Waste Type:</strong> ${wasteType}</div>
+      <div><strong>Status:</strong>
+        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${c.status}</span>
+      </div>
+      <div><strong>Date Filed:</strong> ${c.created_at}</div>
+      ${photoHTML}
+      ${videoHTML}
+      <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
+        <strong>Description:</strong><br>
+        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${description || '—'}</span>
+      </div>
+      ${c.admin_notes ? `
+      <div style="background:#f0fff4;padding:16px;border-radius:10px;border:1px solid #c3e6cb;">
+        <strong>Admin Notes:</strong><br>
+        <span style="white-space:pre-wrap;">${c.admin_notes}</span>
+      </div>` : ''}
+    </div>
+  `;
+
+  document.getElementById('viewModal').classList.add('open');
+}
+
+function closeViewModal() {
+  // Pause video when closing to stop audio playing in background
+  const video = document.querySelector('#viewModalBody video');
+  if (video) { video.pause(); video.currentTime = 0; }
+  document.getElementById('viewModal').classList.remove('open');
+}
+
+function resolveComplaint(id, name) {
+  document.getElementById('resolveId').value = id;
+  document.getElementById('resolveName').textContent = name;
+  document.getElementById('resolveModal').classList.add('open');
+}
+
+function closeResolveModal() {
+  document.getElementById('resolveModal').classList.remove('open');
+}
+
+document.querySelectorAll('.modal-overlay').forEach(modal => {
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) {
+      // Pause video if closing view modal by clicking overlay
+      const video = this.querySelector('video');
+      if (video) { video.pause(); video.currentTime = 0; }
+      this.classList.remove('open');
+    }
+  });
+});
+
+function openAnnouncementModal()  { document.getElementById('announcementModal').classList.add('open'); }
+function closeAnnouncementModal() { document.getElementById('announcementModal').classList.remove('open'); }
+</script>
 
 <?php include '../includes/admin_footer.php'; ?>
