@@ -124,7 +124,7 @@ $page      = min($page, $pages);
 $offset    = ($page - 1) * $PER_PAGE;
 
 $list = fetch_rows($conn,
-    "SELECT id, resident_name, barangay, notes, created_at
+    "SELECT id, resident_name, barangay, created_at
        FROM feedback
       WHERE collected = ? AND $where
       ORDER BY created_at DESC
@@ -167,7 +167,6 @@ include '../includes/admin_header.php';
   .fb-ok   { color:#888; font-size:12px; }
   .fb-bar  { height:8px; border-radius:4px; background:#fde0e0; overflow:hidden; min-width:90px; }
   .fb-bar span { display:block; height:100%; background:#43a047; }
-  .fb-notes { max-width:360px; font-size:13.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
   .fb-empty { text-align:center; padding:36px 10px; color:#889; font-size:14px; }
   .fb-pager { display:flex; justify-content:space-between; align-items:center; margin-top:16px; font-size:13px; color:#667; }
   .fb-pager a, .fb-pager span.btn { text-decoration:none; }
@@ -315,7 +314,6 @@ include '../includes/admin_header.php';
             <th>Resident</th>
             <th>Barangay</th>
             <th>Answer</th>
-            <th>Notes</th>
             <th>Date &amp; Time</th>
           </tr>
         </thead>
@@ -330,7 +328,6 @@ include '../includes/admin_header.php';
                 <?= $tab === 'no' ? 'No' : 'Yes' ?>
               </span>
             </td>
-            <td><div class="fb-notes"><?= trim((string)$f['notes']) !== '' ? htmlspecialchars($f['notes']) : '—' ?></div></td>
             <td style="font-size:13px;color:#555;white-space:nowrap;"><?= htmlspecialchars(to_local($f['created_at'], $APP_TZ, $DB_TZ)) ?></td>
           </tr>
           <?php endforeach; ?>
