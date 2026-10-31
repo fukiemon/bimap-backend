@@ -35,28 +35,6 @@ $pending_complaints  = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE s
 $resolved_complaints = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Resolved'")->fetch_assoc()['c'] ?? 0;
 $total_announcements = $conn->query("SELECT COUNT(*) as c FROM announcement")->fetch_assoc()['c'] ?? 0;
 
-// --- Today's collection feedback (same timezone settings as feedback.php) ---
-// APP_TZ = the timezone the admin sees. DB_TZ = timezone feedback.created_at is stored in.
-$APP_TZ = 'Asia/Manila';
-$DB_TZ  = 'UTC';
-
-$day_start = new DateTime('today', new DateTimeZone($APP_TZ));
-$day_end   = (clone $day_start)->modify('+1 day');
-$day_start->setTimezone(new DateTimeZone($DB_TZ));
-$day_end->setTimezone(new DateTimeZone($DB_TZ));
-$fb_start = $day_start->format('Y-m-d H:i:s');
-$fb_end   = $day_end->format('Y-m-d H:i:s');
-
-$fb_stmt = $conn->prepare("SELECT collected, COUNT(*) AS c FROM feedback WHERE created_at >= ? AND created_at < ? GROUP BY collected");
-$fb_stmt->bind_param("ss", $fb_start, $fb_end);
-$fb_stmt->execute();
-$fb_yes_today = 0;
-$fb_no_today  = 0;
-foreach ($fb_stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
-    if ($row['collected'] === 'yes') $fb_yes_today = (int)$row['c'];
-    if ($row['collected'] === 'no')  $fb_no_today  = (int)$row['c'];
-}
-
 $complaints   = $conn->query("SELECT * FROM complaint ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
 $activities   = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
 $announcements = $conn->query("SELECT * FROM announcement ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
@@ -70,7 +48,7 @@ include '../includes/admin_header.php';
 <?php endif; ?>
 
 <!-- STATS -->
-<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));">
+<div class="stats-grid">
   <div class="stat-card">
     <div class="stat-icon" style="background:#e3f2fd;">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="#1a73e8"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
@@ -107,17 +85,6 @@ include '../includes/admin_header.php';
       <div class="lbl">Total Announcements</div>
     </div>
   </div>
-  <!-- Not collected today -> opens the feedback page on today's "No" list -->
-  <a href="feedback.php?range=today&tab=no" class="stat-card" style="text-decoration:none;color:inherit;">
-    <div class="stat-icon" style="background:#ffebee;">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="#c62828"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-    </div>
-    <div class="stat-info">
-      <div class="num"><?= $fb_no_today ?></div>
-      <div class="lbl">Not Collected Today</div>
-      <div style="font-size:11.5px;color:#888;margin-top:2px;"><?= $fb_yes_today ?> collected today</div>
-    </div>
-  </a>
 </div>
 
 <!-- COMPLAINTS + ACTIVITIES -->
