@@ -4,8 +4,12 @@ require_once '../includes/db.php';
 $page_title='Driver Messages';
 $active_nav='messages';
 
-// Get list of drivers who have messaged
-$threads=$conn->query("SELECT dm.driver_id, MAX(dm.driver_name) as driver_name, MAX(d.phone) as phone, MAX(d.email) as email,
+// Get list of drivers who have messaged.
+// The display name comes from the driver's account (driver table); the name stored
+// on the message rows is only a fallback, because those rows can hold inconsistent names.
+$threads=$conn->query("SELECT dm.driver_id,
+    COALESCE(NULLIF(TRIM(CONCAT(MAX(d.first_name),' ',MAX(d.last_name))),''), MAX(dm.driver_name)) as driver_name,
+    MAX(d.phone) as phone, MAX(d.email) as email,
     (SELECT message FROM driver_message WHERE driver_id=dm.driver_id ORDER BY created_at DESC LIMIT 1) as last_msg,
     (SELECT created_at FROM driver_message WHERE driver_id=dm.driver_id ORDER BY created_at DESC LIMIT 1) as last_time,
     (SELECT COUNT(*) FROM driver_message WHERE driver_id=dm.driver_id AND sender='driver' AND is_read=0) as unread
@@ -20,7 +24,13 @@ if ($selected_driver) {
     $stmt->execute();
     $res=$stmt->get_result();
     if ($res) $conversation=$res->fetch_all(MYSQLI_ASSOC);
-    if (!empty($conversation)) $selected_name=$conversation[0]['driver_name'];
+
+    // Name shown in the chat header: same source as the thread list.
+    foreach ($threads as $th) {
+        if ((int)$th['driver_id'] === $selected_driver) { $selected_name = $th['driver_name']; break; }
+    }
+    if ($selected_name === '' && !empty($conversation)) $selected_name=$conversation[0]['driver_name'];
+
     // Mark as read
     $upd=$conn->prepare("UPDATE driver_message SET is_read=1 WHERE driver_id=? AND sender='driver'");
     $upd->bind_param("i",$selected_driver);
@@ -30,8 +40,14 @@ if ($selected_driver) {
 include '../includes/admin_header.php';
 ?>
 <style>
-.msg-layout{display:grid;grid-template-columns:300px 1fr;gap:0;background:white;border-radius:12px;border:1.5px solid #e0e8f4;overflow:hidden;height:580px;box-shadow:0 4px 20px rgba(0,0,0,0.08)}
-.thread-list{border-right:1px solid #e0e8f4;overflow-y:auto;display:flex;flex-direction:column}
+/* ---- Fit this page to the screen: no page scrolling, only the message list scrolls ---- */
+body{height:100vh;min-height:0;overflow:hidden}
+.layout{min-height:0}
+.main-content{min-height:0}
+.page-body{display:flex;flex-direction:column;overflow:hidden;padding:16px 28px}
+
+.msg-layout{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr);gap:0;background:white;border-radius:12px;border:1.5px solid #e0e8f4;overflow:hidden;flex:1;min-height:0;box-shadow:0 4px 20px rgba(0,0,0,0.08)}
+.thread-list{border-right:1px solid #e0e8f4;overflow-y:auto;display:flex;flex-direction:column;min-height:0}
 .tl-header{padding:14px 16px;background:#f8fafc;border-bottom:1px solid #e0e8f4;font-size:14px;font-weight:900;color:#0d1b2a;flex-shrink:0}
 .thread-item{padding:14px 16px;border-bottom:1px solid #f0f4f8;cursor:pointer;transition:background 0.15s;display:flex;gap:10px;align-items:flex-start;text-decoration:none}
 .thread-item:hover{background:#f8fafc}
@@ -43,16 +59,16 @@ include '../includes/admin_header.php';
 .ti-time{font-size:10px;color:#9baabb;font-weight:600;flex-shrink:0}
 .unread-dot{width:8px;height:8px;background:#1a73e8;border-radius:50%;flex-shrink:0;margin-top:4px}
 
-.chat-area{display:flex;flex-direction:column;overflow:hidden}
+.chat-area{display:flex;flex-direction:column;overflow:hidden;min-height:0;min-width:0}
 .chat-header{padding:14px 18px;border-bottom:1px solid #e0e8f4;display:flex;align-items:center;gap:12px;background:#f8fafc;flex-shrink:0}
 .ch-avatar{width:38px;height:38px;background:#e8f0fe;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
 .ch-name{font-size:15px;font-weight:800;color:#0d1b2a}
 .ch-status{font-size:11px;color:#00897b;font-weight:700}
-.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:#f4f7fc}
+.chat-messages{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:#f4f7fc}
 .bubble-wrap{display:flex;flex-direction:column;max-width:70%}
 .bw-me{align-self:flex-end;align-items:flex-end}
 .bw-driver{align-self:flex-start;align-items:flex-start}
-.bubble{padding:10px 14px;border-radius:16px;font-size:13px;font-weight:600;line-height:1.5}
+.bubble{padding:10px 14px;border-radius:16px;font-size:13px;font-weight:600;line-height:1.5;word-break:break-word}
 .bubble-me{background:#1a73e8;color:white;border-bottom-right-radius:4px}
 .bubble-driver{background:white;color:#0d1b2a;border-bottom-left-radius:4px;border:1.5px solid #e0e8f4}
 .btime{font-size:10px;color:#9baabb;margin-top:2px;font-weight:600}
@@ -65,7 +81,14 @@ include '../includes/admin_header.php';
 .no-chat{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:#9baabb;text-align:center;gap:10px}
 .no-chat .ni{font-size:56px;opacity:0.4}
 .no-chat p{font-size:14px;font-weight:700}
-@media(max-width:768px){.msg-layout{grid-template-columns:1fr;height:auto}.thread-list{border-right:none;border-bottom:1px solid #e0e8f4;max-height:250px}}
+
+/* Phones / narrow windows: go back to a normal scrolling page */
+@media(max-width:768px){
+  body{height:auto;min-height:100vh;overflow:auto}
+  .page-body{overflow:visible}
+  .msg-layout{grid-template-columns:1fr;grid-template-rows:auto;height:75vh;flex:none}
+  .thread-list{border-right:none;border-bottom:1px solid #e0e8f4;max-height:250px}
+}
 </style>
 
 <div class="msg-layout">
@@ -76,11 +99,11 @@ include '../includes/admin_header.php';
     <div style="padding:24px;text-align:center;color:#9baabb;font-size:13px;font-weight:700">No messages yet</div>
     <?php else: ?>
     <?php foreach ($threads as $t): $isActive=$t['driver_id']==$selected_driver; ?>
-    <a href="messages.php?driver=<?= $t['driver_id'] ?>" class="thread-item <?= $isActive?'active':'' ?>">
+    <a href="messages.php?driver=<?= (int)$t['driver_id'] ?>" class="thread-item <?= $isActive?'active':'' ?>">
       <div class="ti-avatar">🚛</div>
       <div class="ti-body">
-        <div class="ti-name"><?= htmlspecialchars($t['driver_name']) ?></div>
-        <div class="ti-preview"><?= htmlspecialchars(substr($t['last_msg']??'',0,40)) ?></div>
+        <div class="ti-name"><?= htmlspecialchars($t['driver_name'] ?? 'Driver') ?></div>
+        <div class="ti-preview"><?= htmlspecialchars(mb_substr($t['last_msg']??'',0,40)) ?></div>
       </div>
       <?php if ($t['unread']>0): ?><div class="unread-dot"></div><?php endif; ?>
     </a>
@@ -123,7 +146,11 @@ include '../includes/admin_header.php';
 <script>
 const cm = document.getElementById('cm');
 const driverId = <?= (int)$selected_driver ?>;
-if (cm) cm.scrollTop = cm.scrollHeight;
+
+// Always open the chat at the newest message.
+function scrollToBottom() { if (cm) cm.scrollTop = cm.scrollHeight; }
+scrollToBottom();
+window.addEventListener('load', scrollToBottom);
 
 const ri = document.getElementById('replyInput');
 const form = document.getElementById('replyForm');
@@ -161,7 +188,7 @@ if (form) {
                 if (data.success) {
                     cm.appendChild(escapeAndBuildBubble(data.message, 'admin', data.time));
                     cm.dataset.lastId = data.id;
-                    cm.scrollTop = cm.scrollHeight;
+                    scrollToBottom();
                     ri.value = '';
                     ri.style.height = 'auto';
                 } else {
@@ -195,7 +222,7 @@ if (driverId && cm) {
                     cm.appendChild(escapeAndBuildBubble(m.message, m.sender, m.time));
                     cm.dataset.lastId = m.id;
                 });
-                cm.scrollTop = cm.scrollHeight;
+                scrollToBottom();
             })
             .catch(() => { /* silent fail, retry next interval */ });
     }, 4000);
