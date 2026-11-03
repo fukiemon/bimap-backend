@@ -121,9 +121,10 @@ if ($userType === 'driver') {
     $profile['license_photo']     = $photoPath;   // e.g. "uploads/licenses/ab12....jpg"
     $profile['location']          = $user['location'] ?? null;
 } else {
-    $profile['barangay'] = $user['barangay'] ?? null;
-    $profile['purok']    = $user['purok'] ?? null;
-    $profile['house_no'] = $user['house_no'] ?? null;
+    $profile['barangay']          = $user['barangay'] ?? null;
+    $profile['household_address'] = $user['household_address'] ?? null;
+    $profile['municipality']      = 'Malita';
+    $profile['province']          = 'Davao Occidental';
 }
 
 json_ok([
