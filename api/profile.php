@@ -2,18 +2,22 @@
 // GET  /api/profile.php  -> the logged-in resident's or driver's own profile
 // POST /api/profile.php  -> update profile info and/or picture
 //   Body: { "first_name", "last_name", "email", "phone",
-//            "barangay" (resident only) | "location" (driver only),
+//            "barangay", "household_address"   (resident only) |
+//            "location"                        (driver only),
 //            "profile_pic_base64": "data:image/jpeg;base64,..." }  (all optional —
 //            only fields present in the body are changed)
 //
 // Requires: Authorization: Bearer <token> (resident or driver)
 //
-// Read-only fields (barangay assignment for drivers, license info,
-// is_verified, etc.) are intentionally NOT editable here — this endpoint
-// only touches the same profile fields admin/settings.php lets an admin
-// edit about themselves.
+// Residents: barangay must be one of the 30 barangays of Malita, and only one
+// resident account is allowed per household (barangay + household address) —
+// see household_helpers.php.
+//
+// Read-only fields (barangay assignment for drivers, license number/photo,
+// is_verified, etc.) are intentionally NOT editable here.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
+require_once __DIR__ . '/household_helpers.php';
 
 $auth = require_auth();
 $userType = $auth['user_type']; // 'resident' or 'driver'
@@ -63,7 +67,21 @@ function fetch_profile_row($conn, $table, $userId) {
     $row = $stmt->get_result()->fetch_assoc();
     if ($row) {
         unset($row['password']);
+        unset($row['household_key']); // internal, never sent to the app
         $row['profile_pic_url'] = public_url($row['profile_pic'] ?? null);
+
+        if ($table === 'driver') {
+            // license_photo is normally a file path (e.g. uploads/licenses/ab12.jpg).
+            // Older rows may hold a base64 data URI: don't send that (it can be
+            // megabytes); the app just shows "No license photo on file" for those.
+            $photo = (string) ($row['license_photo'] ?? '');
+            if ($photo !== '' && strncmp($photo, 'data:', 5) !== 0) {
+                $row['license_photo_url'] = public_url($photo);
+            } else {
+                $row['license_photo_url'] = null;
+            }
+            unset($row['license_photo']);
+        }
     }
     return $row;
 }
@@ -110,14 +128,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
     }
 
-    $extraCol = null;
-    $extraVal = null;
-    if ($table === 'resident') {
-        $extraCol = 'barangay';
-        $extraVal = array_key_exists('barangay', $body) ? trim($body['barangay']) : ($current['barangay'] ?? '');
-    } else { // driver
-        $extraCol = 'location';
-        $extraVal = array_key_exists('location', $body) ? trim($body['location']) : ($current['location'] ?? '');
+    // Resident: barangay + household address (one account per household).
+    // Saved by the helper, which re-checks the 30 barangays and the household.
+    if ($table === 'resident'
+        && (array_key_exists('barangay', $body) || array_key_exists('household_address', $body))) {
+        $newBarangay = array_key_exists('barangay', $body) ? trim($body['barangay']) : ($current['barangay'] ?? '');
+        $newAddress  = array_key_exists('household_address', $body)
+            ? trim($body['household_address'])
+            : ($current['household_address'] ?? '');
+
+        $err = apply_resident_address_update($conn, $userId, $newBarangay, $newAddress);
+        if ($err !== null) {
+            json_error($err, 409);
+        }
+    }
+
+    // Driver: location is a plain editable field.
+    $location = null;
+    if ($table === 'driver') {
+        $location = array_key_exists('location', $body) ? trim($body['location']) : ($current['location'] ?? '');
     }
 
     $profilePicPath = $current['profile_pic'] ?? null;
@@ -132,10 +161,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
     }
 
-    $stmt = $conn->prepare(
-        "UPDATE `$table` SET first_name = ?, last_name = ?, email = ?, phone = ?, `$extraCol` = ?, profile_pic = ? WHERE id = ?"
-    );
-    $stmt->bind_param('ssssssi', $firstName, $lastName, $email, $phone, $extraVal, $profilePicPath, $userId);
+    if ($table === 'driver') {
+        $stmt = $conn->prepare(
+            "UPDATE `driver` SET first_name = ?, last_name = ?, email = ?, phone = ?, location = ?, profile_pic = ? WHERE id = ?"
+        );
+        $stmt->bind_param('ssssssi', $firstName, $lastName, $email, $phone, $location, $profilePicPath, $userId);
+    } else {
+        $stmt = $conn->prepare(
+            "UPDATE `resident` SET first_name = ?, last_name = ?, email = ?, phone = ?, profile_pic = ? WHERE id = ?"
+        );
+        $stmt->bind_param('sssssi', $firstName, $lastName, $email, $phone, $profilePicPath, $userId);
+    }
     $stmt->execute();
 
     $row = fetch_profile_row($conn, $table, $userId);
