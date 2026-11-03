@@ -35,8 +35,22 @@ $pending_complaints  = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE s
 $resolved_complaints = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Resolved'")->fetch_assoc()['c'] ?? 0;
 $total_announcements = $conn->query("SELECT COUNT(*) as c FROM announcement")->fetch_assoc()['c'] ?? 0;
 
-$complaints   = $conn->query("SELECT * FROM complaint ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
-$activities   = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
+// Complaints joined with the resident's saved profile (password is NOT selected).
+$complaints = $conn->query("
+    SELECT c.*,
+           r.first_name         AS r_first_name,
+           r.last_name          AS r_last_name,
+           r.email              AS r_email,
+           r.phone              AS r_phone,
+           r.barangay           AS r_barangay,
+           r.household_address  AS r_household_address
+    FROM complaint c
+    LEFT JOIN resident r ON r.id = c.resident_id
+    ORDER BY c.created_at DESC
+    LIMIT 3
+")->fetch_all(MYSQLI_ASSOC);
+
+$activities    = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
 $announcements = $conn->query("SELECT * FROM announcement ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
 
 include '../includes/admin_header.php';
@@ -103,7 +117,7 @@ include '../includes/admin_header.php';
             <th>#</th>
             <th>Status</th>
             <th>Resident</th>
-            <th>Location</th>
+            <th>Barangay</th>
             <th>Waste Type</th>
             <th>Date</th>
             <th>Actions</th>
@@ -111,12 +125,12 @@ include '../includes/admin_header.php';
         </thead>
         <tbody>
           <?php foreach ($complaints as $c):
-            // barangay and waste_type are real columns on `complaint` now —
-            // no need to regex-parse them back out of the free-text concern
-            // field the way this table used to. Concern text (and any photo/
-            // video attached to it) still shows in the View modal below.
-            $location   = !empty($c['barangay']) ? $c['barangay'] : 'Not specified';
+            $barangay   = !empty($c['barangay']) ? $c['barangay'] : 'Not specified';
             $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : '—';
+
+            // Prefer the resident's saved profile name; fall back to the name stored on the complaint.
+            $profile_name = trim(($c['r_first_name'] ?? '') . ' ' . ($c['r_last_name'] ?? ''));
+            $display_name = $profile_name !== '' ? $profile_name : ($c['resident_name'] ?? 'Unknown Resident');
           ?>
           <tr>
             <td><strong>#<?= htmlspecialchars($c['id'] ?? '—') ?></strong></td>
@@ -125,15 +139,15 @@ include '../includes/admin_header.php';
                 <?= htmlspecialchars($c['status'] ?? 'Pending') ?>
               </span>
             </td>
-            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($c['resident_name'] ?? 'Unknown Resident') ?></td>
-            <td style="font-size:13.5px;"><?= htmlspecialchars($location) ?></td>
+            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($display_name) ?></td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($barangay) ?></td>
             <td style="font-size:13.5px;"><?= htmlspecialchars($waste_type) ?></td>
             <td style="font-size:13px;color:#555;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
             <td>
-              <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c)) ?>)">View</button>
+              <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c), ENT_QUOTES) ?>)">View</button>
               <?php if (($c['status'] ?? '') === 'Pending'): ?>
                 <button class="btn btn-sm btn-success" style="margin-left:4px;"
-                        onclick="resolveComplaint(<?= $c['id'] ?>, '<?= htmlspecialchars(addslashes($c['resident_name'] ?? 'Resident')) ?>')">
+                        onclick="resolveComplaint(<?= (int)$c['id'] ?>, <?= htmlspecialchars(json_encode($display_name), ENT_QUOTES) ?>)">
                   Resolve
                 </button>
               <?php endif; ?>
@@ -181,8 +195,8 @@ include '../includes/admin_header.php';
         <div class="activity-text"><?= htmlspecialchars($ann['title'] ?? 'Untitled') ?></div>
         <div class="activity-time"><?= htmlspecialchars(substr($ann['message'] ?? '', 0, 65)) ?>...</div>
         <div style="margin-top:3px;">
-          <span class="badge badge-<?= $ann['target_audience'] ?? 'all' ?>">
-            <?= ucfirst($ann['target_audience'] ?? 'all') ?>
+          <span class="badge badge-<?= htmlspecialchars($ann['target_audience'] ?? 'all') ?>">
+            <?= htmlspecialchars(ucfirst($ann['target_audience'] ?? 'all')) ?>
           </span>
         </div>
       </div>
@@ -259,14 +273,21 @@ include '../includes/admin_header.php';
 </div>
 
 <script>
+// Escapes text before it is placed into HTML (prevents injected markup from running).
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 function viewComplaint(c) {
   const concernText = c.concern || '';
 
+  // Older complaints may still have these tags inside the free-text concern.
   const locMatch   = concernText.match(/\[Location:\s*([^\]]+)\]/i);
   const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
   const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
 
-  const location  = c.barangay || (locMatch ? locMatch[1] : '—');
+  const barangay  = c.barangay || (locMatch ? locMatch[1] : '—');
   const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
   const videoPath = videoMatch ? videoMatch[1].trim() : null;
 
@@ -276,15 +297,31 @@ function viewComplaint(c) {
     .replace(/\[Video:[^\]]*\]\s*/i, '')
     .trim();
 
+  // Resident profile details (from the joined resident table)
+  const fullName = [c.r_first_name, c.r_last_name].filter(Boolean).join(' ')
+                   || c.resident_name || '—';
+
+  const residentHTML = `
+    <div style="background:#f4f8ff;padding:16px;border-radius:10px;border:1px solid #dbe7ff;">
+      <strong>Resident Details</strong>
+      <div style="margin-top:8px;display:grid;gap:4px;font-size:14px;">
+        <div><strong>Name:</strong> ${esc(fullName)}</div>
+        <div><strong>Phone:</strong> ${esc(c.r_phone || c.resident_phone || '—')}</div>
+        <div><strong>Email:</strong> ${esc(c.r_email || '—')}</div>
+        <div><strong>Home Barangay:</strong> ${esc(c.r_barangay || '—')}</div>
+        <div><strong>Household Address:</strong> ${esc(c.r_household_address || '—')}</div>
+      </div>
+    </div>`;
+
   // Photo HTML
   let photoHTML = '';
   if (c.photo && c.photo.trim() !== '') {
     photoHTML = `
       <div style="margin:15px 0;">
         <strong>📷 Attached Photo:</strong><br>
-        <img src="../${c.photo}"
+        <img src="../${esc(c.photo)}"
              style="max-width:100%;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
-             onclick="window.open('../${c.photo}', '_blank')"
+             onclick="window.open('../${esc(c.photo)}', '_blank')"
              alt="Complaint Photo">
       </div>`;
   }
@@ -297,11 +334,11 @@ function viewComplaint(c) {
         <strong>🎥 Attached Video:</strong><br>
         <video controls playsinline
                style="max-width:100%;width:100%;border-radius:10px;border:2px solid #ede9fe;margin-top:8px;background:#000;">
-          <source src="../${videoPath}">
+          <source src="../${esc(videoPath)}">
           Your browser does not support the video tag.
         </video>
         <div style="margin-top:6px;">
-          <a href="../${videoPath}" target="_blank" download
+          <a href="../${esc(videoPath)}" target="_blank" download
              style="font-size:12px;color:#7c3aed;font-weight:700;text-decoration:none;">
             ⬇️ Download Video
           </a>
@@ -313,23 +350,23 @@ function viewComplaint(c) {
 
   document.getElementById('viewModalBody').innerHTML = `
     <div style="display:grid;gap:14px;line-height:1.6;">
-      <div><strong>Resident:</strong> ${c.resident_name} (${c.resident_phone || '—'})</div>
-      <div><strong>Location:</strong> ${location}</div>
-      <div><strong>Waste Type:</strong> ${wasteType}</div>
+      ${residentHTML}
+      <div><strong>Barangay:</strong> ${esc(barangay)}</div>
+      <div><strong>Waste Type:</strong> ${esc(wasteType)}</div>
       <div><strong>Status:</strong>
-        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${c.status}</span>
+        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${esc(c.status)}</span>
       </div>
-      <div><strong>Date Filed:</strong> ${c.created_at}</div>
+      <div><strong>Date Filed:</strong> ${esc(c.created_at)}</div>
       ${photoHTML}
       ${videoHTML}
       <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
         <strong>Description:</strong><br>
-        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${description || '—'}</span>
+        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${esc(description) || '—'}</span>
       </div>
       ${c.admin_notes ? `
       <div style="background:#f0fff4;padding:16px;border-radius:10px;border:1px solid #c3e6cb;">
         <strong>Admin Notes:</strong><br>
-        <span style="white-space:pre-wrap;">${c.admin_notes}</span>
+        <span style="white-space:pre-wrap;">${esc(c.admin_notes)}</span>
       </div>` : ''}
     </div>
   `;
