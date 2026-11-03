@@ -32,13 +32,15 @@ if (isset($_POST['resolve_id'])) {
     $success = 'Complaint marked as resolved.';
 }
 
-// Filter
+// Filter (columns are prefixed with c. / r. because complaint is joined to resident)
 $status_filter = $_GET['status'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
 
 $where = [];
-if ($status_filter !== 'all') $where[] = "status = ?";
-if ($search) $where[] = "(resident_name LIKE ? OR concern LIKE ?)";
+if ($status_filter !== 'all') $where[] = "c.status = ?";
+if ($search) {
+    $where[] = "(c.resident_name LIKE ? OR c.concern LIKE ? OR CONCAT(r.first_name, ' ', r.last_name) LIKE ?)";
+}
 
 $where_sql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 $params = [];
@@ -49,23 +51,43 @@ if ($search) {
     $search_param = "%$search%";
     $params[] = $search_param;
     $params[] = $search_param;
-    $types .= 'ss';
+    $params[] = $search_param;
+    $types .= 'sss';
 }
 
 $per_page = 10;
 $page = max(1, (int)($_GET['page'] ?? 1));
 
-$total_stmt = $conn->prepare("SELECT COUNT(*) as c FROM complaint $where_sql");
+$total_stmt = $conn->prepare(
+    "SELECT COUNT(*) as c
+     FROM complaint c
+     LEFT JOIN resident r ON r.id = c.resident_id
+     $where_sql"
+);
 if (!empty($params)) $total_stmt->bind_param($types, ...$params);
 $total_stmt->execute();
 $total = $total_stmt->get_result()->fetch_assoc()['c'];
 $pages = ceil($total / $per_page);
 $offset = ($page - 1) * $per_page;
 
-$stmt = $conn->prepare("SELECT * FROM complaint $where_sql ORDER BY created_at DESC LIMIT ? OFFSET ?");
+// Joined with the resident's saved profile (password is NOT selected).
+$stmt = $conn->prepare(
+    "SELECT c.*,
+            r.first_name         AS r_first_name,
+            r.last_name          AS r_last_name,
+            r.email              AS r_email,
+            r.phone              AS r_phone,
+            r.barangay           AS r_barangay,
+            r.household_address  AS r_household_address
+     FROM complaint c
+     LEFT JOIN resident r ON r.id = c.resident_id
+     $where_sql
+     ORDER BY c.created_at DESC
+     LIMIT ? OFFSET ?"
+);
 $limit_types = $types . 'ii';
 $limit_params = array_merge($params, [$per_page, $offset]);
-if (!empty($limit_params)) $stmt->bind_param($limit_types, ...$limit_params);
+$stmt->bind_param($limit_types, ...$limit_params);
 $stmt->execute();
 $complaints = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
@@ -89,7 +111,7 @@ include '../includes/admin_header.php';
       </select>
       <button type="submit" class="btn btn-primary">Filter</button>
       <a href="complaints.php" class="btn" style="background:#f0f4f8;color:#333;">Reset</a>
-      <span style="margin-left:auto;font-size:13px;color:#888;font-weight:700;"><?= $total ?> complaint(s) found</span>
+      <span style="margin-left:auto;font-size:13px;color:#888;font-weight:700;"><?= (int)$total ?> complaint(s) found</span>
     </form>
   </div>
 </div>
@@ -104,7 +126,7 @@ include '../includes/admin_header.php';
           <th>#</th>
           <th>Status</th>
           <th>Resident</th>
-          <th>Location</th>
+          <th>Barangay</th>
           <th>Type</th>
           <th>Concern</th>
           <th>Date</th>
@@ -117,38 +139,43 @@ include '../includes/admin_header.php';
         <?php endif; ?>
 
         <?php foreach ($complaints as $c):
-            // barangay and waste_type are real columns on `complaint` now —
-            // no need to regex-parse them back out of the free-text concern
-            // field. Fall back to the old [Location:]/[Type:] tags for any
-            // legacy rows that predate those columns being populated.
-            preg_match('/\[Location:\s*([^\]]+)\]/i', $c['concern'], $loc_match);
-            preg_match('/\[Type:\s*([^\]]+)\]/i', $c['concern'], $type_match);
+            $concern = $c['concern'] ?? '';
 
-            $location   = !empty($c['barangay'])   ? $c['barangay']   : ($loc_match[1]  ?? 'Not specified');
+            // barangay and waste_type are real columns on `complaint`. Fall back to the
+            // old [Location:]/[Type:] tags for legacy rows that predate those columns.
+            preg_match('/\[Location:\s*([^\]]+)\]/i', $concern, $loc_match);
+            preg_match('/\[Type:\s*([^\]]+)\]/i', $concern, $type_match);
+
+            $barangay   = !empty($c['barangay'])   ? $c['barangay']   : ($loc_match[1]  ?? 'Not specified');
             $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : ($type_match[1] ?? '—');
 
-            $has_video = (bool) preg_match('/\[Video:\s*([^\]]+)\]/i', $c['concern']);
+            $has_video = (bool) preg_match('/\[Video:\s*([^\]]+)\]/i', $concern);
 
-            $description = preg_replace('/\[Location:[^\]]*\]\s*/i', '', $c['concern']);
+            $description = preg_replace('/\[Location:[^\]]*\]\s*/i', '', $concern);
             $description = preg_replace('/\[Type:[^\]]*\]\s*/i', '', $description);
             $description = preg_replace('/\[Video:[^\]]*\]\s*/i', '', $description);
             $description = trim($description);
+
+            // Prefer the resident's saved profile; fall back to what was stored on the complaint.
+            $profile_name = trim(($c['r_first_name'] ?? '') . ' ' . ($c['r_last_name'] ?? ''));
+            $display_name = $profile_name !== '' ? $profile_name : ($c['resident_name'] ?? 'Unknown');
+            $display_phone = !empty($c['r_phone']) ? $c['r_phone'] : ($c['resident_phone'] ?? '—');
         ?>
         <tr>
-          <td style="color:#aaa;font-size:12px;">#<?= $c['id'] ?></td>
+          <td style="color:#aaa;font-size:12px;">#<?= (int)$c['id'] ?></td>
           <td>
             <span class="badge <?= $c['status'] === 'Pending' ? 'badge-pending' : 'badge-resolved' ?>">
-              <?= $c['status'] ?>
+              <?= htmlspecialchars($c['status']) ?>
             </span>
           </td>
           <td>
-            <div style="font-weight:700;font-size:13px;"><?= htmlspecialchars($c['resident_name'] ?? 'Unknown') ?></div>
-            <div style="font-size:12px;color:#888;"><?= htmlspecialchars($c['resident_phone'] ?? '—') ?></div>
+            <div style="font-weight:700;font-size:13px;"><?= htmlspecialchars($display_name) ?></div>
+            <div style="font-size:12px;color:#888;"><?= htmlspecialchars($display_phone) ?></div>
           </td>
-          <td style="font-size:13px;"><?= htmlspecialchars($location) ?></td>
+          <td style="font-size:13px;"><?= htmlspecialchars($barangay) ?></td>
           <td style="font-size:13px;"><?= htmlspecialchars($waste_type) ?></td>
           <td style="font-size:13px;max-width:260px;" title="<?= htmlspecialchars($description) ?>">
-            <?= htmlspecialchars(substr($description, 0, 70)) ?><?= strlen($description) > 70 ? '...' : '' ?>
+            <?= htmlspecialchars(mb_substr($description, 0, 70)) ?><?= mb_strlen($description) > 70 ? '...' : '' ?>
             <?php if ($has_video): ?>
               <span style="display:inline-block;margin-left:4px;background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;">🎥 Video</span>
             <?php endif; ?>
@@ -157,10 +184,10 @@ include '../includes/admin_header.php';
             <?= date('M d, Y', strtotime($c['created_at'])) ?>
           </td>
           <td>
-            <button class="btn-view" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c)) ?>)">View</button>
+            <button class="btn-view" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c), ENT_QUOTES) ?>)">View</button>
             <?php if ($c['status'] === 'Pending'): ?>
             <button class="btn btn-success btn-sm" style="margin-left:4px;"
-                    onclick="resolveComplaint(<?= $c['id'] ?>, '<?= htmlspecialchars(addslashes($c['resident_name'] ?? 'Resident')) ?>')">
+                    onclick="resolveComplaint(<?= (int)$c['id'] ?>, <?= htmlspecialchars(json_encode($display_name), ENT_QUOTES) ?>)">
               Resolve
             </button>
             <?php endif; ?>
@@ -216,14 +243,21 @@ include '../includes/admin_header.php';
 </div>
 
 <script>
+// Escapes text before it is placed into HTML (prevents injected markup from running).
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 function viewComplaint(c) {
   const concernText = c.concern || '';
 
+  // Older complaints may still have these tags inside the free-text concern.
   const locMatch   = concernText.match(/\[Location:\s*([^\]]+)\]/i);
   const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
   const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
 
-  const location  = c.barangay   || (locMatch  ? locMatch[1]  : '—');
+  const barangay  = c.barangay   || (locMatch  ? locMatch[1]  : '—');
   const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
   const videoPath = videoMatch ? videoMatch[1].trim() : null;
 
@@ -233,15 +267,31 @@ function viewComplaint(c) {
     .replace(/\[Video:[^\]]*\]\s*/i, '')
     .trim();
 
+  // Resident profile details (from the joined resident table)
+  const fullName = [c.r_first_name, c.r_last_name].filter(Boolean).join(' ')
+                   || c.resident_name || '—';
+
+  const residentHTML = `
+    <div style="background:#f4f8ff;padding:16px;border-radius:10px;border:1px solid #dbe7ff;">
+      <strong>Resident Details</strong>
+      <div style="margin-top:8px;display:grid;gap:4px;font-size:14px;">
+        <div><strong>Name:</strong> ${esc(fullName)}</div>
+        <div><strong>Phone:</strong> ${esc(c.r_phone || c.resident_phone || '—')}</div>
+        <div><strong>Email:</strong> ${esc(c.r_email || '—')}</div>
+        <div><strong>Home Barangay:</strong> ${esc(c.r_barangay || '—')}</div>
+        <div><strong>Household Address:</strong> ${esc(c.r_household_address || '—')}</div>
+      </div>
+    </div>`;
+
   // Photo
   let photoHTML = '';
   if (c.photo && c.photo.trim() !== '') {
     photoHTML = `
       <div style="margin:15px 0;">
         <strong>📷 Attached Photo:</strong><br>
-        <img src="../${c.photo}"
+        <img src="../${esc(c.photo)}"
              style="max-width:100%;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
-             onclick="window.open('../${c.photo}', '_blank')"
+             onclick="window.open('../${esc(c.photo)}', '_blank')"
              alt="Complaint Photo">
       </div>`;
   }
@@ -254,11 +304,11 @@ function viewComplaint(c) {
         <strong>🎥 Attached Video:</strong><br>
         <video controls playsinline
                style="max-width:100%;width:100%;border-radius:10px;border:2px solid #ede9fe;margin-top:8px;background:#000;">
-          <source src="../${videoPath}">
+          <source src="../${esc(videoPath)}">
           Your browser does not support the video tag.
         </video>
         <div style="margin-top:6px;">
-          <a href="../${videoPath}" target="_blank" download
+          <a href="../${esc(videoPath)}" target="_blank" download
              style="font-size:12px;color:#7c3aed;font-weight:700;text-decoration:none;">
             ⬇️ Download Video
           </a>
@@ -270,23 +320,23 @@ function viewComplaint(c) {
 
   document.getElementById('viewModalBody').innerHTML = `
     <div style="display:grid;gap:14px;line-height:1.6;">
-      <div><strong>Resident:</strong> ${c.resident_name} (${c.resident_phone || '—'})</div>
-      <div><strong>Location:</strong> ${location}</div>
-      <div><strong>Waste Type:</strong> ${wasteType}</div>
+      ${residentHTML}
+      <div><strong>Barangay:</strong> ${esc(barangay)}</div>
+      <div><strong>Waste Type:</strong> ${esc(wasteType)}</div>
       <div><strong>Status:</strong>
-        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${c.status}</span>
+        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${esc(c.status)}</span>
       </div>
-      <div><strong>Date Filed:</strong> ${c.created_at}</div>
+      <div><strong>Date Filed:</strong> ${esc(c.created_at)}</div>
       ${photoHTML}
       ${videoHTML}
       <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
         <strong>Description:</strong><br>
-        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${description || '—'}</span>
+        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${esc(description) || '—'}</span>
       </div>
       ${c.admin_notes ? `
       <div style="background:#f0fff4;padding:16px;border-radius:10px;border:1px solid #c3e6cb;">
         <strong>Admin Notes:</strong><br>
-        <span style="white-space:pre-wrap;">${c.admin_notes}</span>
+        <span style="white-space:pre-wrap;">${esc(c.admin_notes)}</span>
       </div>` : ''}
     </div>
   `;
