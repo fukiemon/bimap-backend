@@ -62,9 +62,9 @@ if (isset($conn)) {
   .layout { display: flex; flex: 1; }
 
   /* SIDEBAR
-     Sticks right under the top bar and is exactly as tall as the rest of the
-     screen, so it is always fully blue. If the menu is ever taller than the
-     screen, it scrolls inside itself (scrollbar hidden). */
+     Exactly as tall as the screen under the top bar. The menu in the middle
+     scrolls by itself if it ever runs out of room; the logo stays on top and
+     Logout stays pinned at the bottom. */
   .sidebar {
     width: 170px;
     background: linear-gradient(180deg, #1a73e8 0%, #0d47a1 100%);
@@ -74,16 +74,15 @@ if (isset($conn)) {
     top: 30px;
     height: calc(100vh - 30px);
     flex-shrink: 0;
-    overflow-y: auto;
-    scrollbar-width: none;
+    overflow: hidden;
   }
-  .sidebar::-webkit-scrollbar { display: none; }
   .sidebar-logo {
-    padding: 18px 16px 12px;
+    padding: 12px 16px 10px;
     border-bottom: 1px solid rgba(255,255,255,0.15);
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-shrink: 0;
   }
   .sidebar-logo .logo-icon {
     width: 42px; height: 42px;
@@ -98,10 +97,17 @@ if (isset($conn)) {
     color: white;
     letter-spacing: -0.5px;
   }
-  .sidebar-nav { flex: 1; padding: 8px 0; }
+  .sidebar-nav {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+    padding: 6px 0;
+  }
+  .sidebar-nav::-webkit-scrollbar { display: none; }
   .nav-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 16px;
+    padding: 9px 16px;
     color: rgba(255,255,255,0.8);
     text-decoration: none;
     font-size: 14px;
@@ -128,7 +134,17 @@ if (isset($conn)) {
     padding: 0 5px;
     line-height: 1;
   }
-  .nav-logout { margin-top: auto; border-top: 1px solid rgba(255,255,255,0.15); }
+  .nav-logout {
+    flex-shrink: 0;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    background: rgba(0,0,0,0.12);
+  }
+
+  /* Shorter screens: tighten the sidebar a little so everything fits without scrolling */
+  @media (max-height: 820px) {
+    .sidebar-logo img { width: 80px !important; }
+    .nav-item { padding: 7px 16px; font-size: 13px; }
+  }
 
   /* MAIN CONTENT */
   .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
