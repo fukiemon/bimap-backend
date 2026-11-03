@@ -1,18 +1,19 @@
 <?php
 /**
- * POST /api/register.php   (rebuilt)
+ * POST /api/register.php   (patched)
  *
  * JSON body sent by the Flutter app:
  *   user_type            'resident' | 'driver'
  *   first_name, last_name
  *   phone  ("+639XXXXXXXXX")  OR  email
  *   barangay, password
- *   driver only: license_number, license_photo_base64 (data URI), location
+ *   resident only: purok, house_no          (NEW: used for the one-account-per-household rule)
+ *   driver only:   license_number, license_photo_base64 (data URI), location
  *
  * The contact must already be verified (verify_code.php) within the last
  * 30 minutes, using the exact same contact string.
  *
- * Edit the CONFIG block if your column names are different.
+ * Run bimap_migration.sql first (adds resident.purok, house_no, household_key).
  */
 
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
@@ -20,13 +21,26 @@ require_once __DIR__ . '/verification_helpers.php';    // contact_is_verified(),
 require_once __DIR__ . '/password_policy.php';         // validate_password_strength()
 
 // ============================ CONFIG ============================
+// The 30 barangays of Malita, Davao Occidental. Only these are accepted.
+const MALITA_BARANGAYS = [
+    'Bito', 'Bolila', 'Buhangin', 'Culaman', 'Datu Danwata', 'Demoloc',
+    'Felis', 'Fishing Village', 'Kibalatong', 'Kidalapong', 'Kilalag',
+    'Kinangan', 'Lacaron', 'Lagumit', 'Lais', 'Little Baguio', 'Macol',
+    'Mana', 'Manuel Peralta', 'New Argao', 'Pangaleon', 'Pangian',
+    'Pinalpalan', 'Poblacion', 'Sangay', 'Talogoy', 'Tical', 'Ticulon',
+    'Tingolo', 'Tubalan',
+];
+
 $RESIDENT_COLS = [
-    'first_name' => 'first_name',
-    'last_name'  => 'last_name',
-    'email'      => 'email',
-    'phone'      => 'phone',
-    'barangay'   => 'barangay',
-    'password'   => 'password',
+    'first_name'    => 'first_name',
+    'last_name'     => 'last_name',
+    'email'         => 'email',
+    'phone'         => 'phone',
+    'barangay'      => 'barangay',
+    'purok'         => 'purok',
+    'house_no'      => 'house_no',
+    'household_key' => 'household_key',
+    'password'      => 'password',
 ];
 
 $DRIVER_COLS = [
@@ -40,8 +54,8 @@ $DRIVER_COLS = [
     'barangay'       => null,
     'password'       => 'password',
     'license_number' => 'license_number',
-    'driver_license' => 'driver_license',   // the table has both; the number is saved in each
-    'license_photo'  => 'license_photo',    // varchar(255): only fits a file path, see PHOTO_MODE
+    'driver_license' => 'driver_license',   // duplicate column; remove this line if you drop it (see migration)
+    'license_photo'  => 'license_photo',    // stores the file path, see PHOTO_MODE
     'location'       => 'location',
     'is_verified'    => 'is_verified',      // 0 = pending admin approval (checked by login.php)
 ];
@@ -59,6 +73,28 @@ function fail(string $msg, int $status = 400): void
     json_response(['success' => false, 'error' => $msg, 'message' => $msg], $status);
 }
 
+/** Lowercase, drop filler words and punctuation, collapse spaces. */
+function norm_part(string $s, array $dropWords = []): string
+{
+    $s = mb_strtolower(trim($s));
+    $s = preg_replace('/\bblk\b/u', 'block', $s);
+    foreach ($dropWords as $w) {
+        $s = preg_replace('/\b' . preg_quote($w, '/') . '\b/u', ' ', $s);
+    }
+    $s = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $s);
+    return trim($s);
+}
+
+/** Returns the official spelling of a Malita barangay, or null if not one. */
+function canonical_barangay(string $input): ?string
+{
+    $want = norm_part($input);
+    foreach (MALITA_BARANGAYS as $b) {
+        if (norm_part($b) === $want) return $b;
+    }
+    return null;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     fail('Method not allowed.', 405);
 }
@@ -74,6 +110,8 @@ $lastName  = trim($in['last_name'] ?? '');
 $email     = trim($in['email'] ?? '');
 $phone     = trim($in['phone'] ?? '');
 $barangay  = trim($in['barangay'] ?? '');
+$purok     = trim($in['purok'] ?? '');
+$houseNo   = trim($in['house_no'] ?? '');
 $password  = (string) ($in['password'] ?? '');
 $licenseNo = trim($in['license_number'] ?? '');
 $photoB64  = (string) ($in['license_photo_base64'] ?? '');
@@ -85,6 +123,14 @@ if (!in_array($role, ['resident', 'driver'], true)) {
 if ($firstName === '' || $lastName === '' || $barangay === '' || $password === '') {
     fail('Please fill in all required fields.');
 }
+
+// Only the 30 barangays of Malita are allowed.
+$barangayCanon = canonical_barangay($barangay);
+if ($barangayCanon === null) {
+    fail('Please select a barangay in Malita, Davao Occidental.');
+}
+$barangay = $barangayCanon;
+
 $pwError = validate_password_strength($password, [$firstName, $lastName, strtok($email, '@') ?: '', $phone]);
 if ($pwError !== null) {
     fail($pwError);
@@ -121,16 +167,44 @@ foreach (['resident', 'driver'] as $t) {
 }
 
 $hash = password_hash($password, PASSWORD_DEFAULT);
+$savedFile = null;
 
 if ($role === 'resident') {
     $table = 'resident';
     $cols  = $RESIDENT_COLS;
-    $data  = [
-        'first_name' => $firstName,
-        'last_name'  => $lastName,
-        'barangay'   => $barangay,
-        'password'   => $hash,
-        $col         => $contact,
+
+    if ($purok === '' || $houseNo === '') {
+        fail('Please enter your purok and house/lot number.');
+    }
+    if (mb_strlen($purok) > 50 || mb_strlen($houseNo) > 100) {
+        fail('Purok or house/lot number is too long.');
+    }
+
+    // Household identity = barangay + purok + house/lot number, normalized so
+    // "Purok 3" / "purok  3" / "3" and "Blk 3, Lot 5" / "block 3 lot 5" match.
+    $purokN = norm_part($purok, ['purok', 'prk']);
+    $houseN = norm_part($houseNo);
+    if ($purokN === '' || $houseN === '') {
+        fail('Please enter a valid purok and house/lot number.');
+    }
+    $householdKey = norm_part($barangay) . '|' . $purokN . '|' . $houseN;
+
+    $h = $conn->prepare("SELECT id FROM resident WHERE household_key = ? LIMIT 1");
+    $h->bind_param('s', $householdKey);
+    $h->execute();
+    if ($h->get_result()->fetch_assoc()) {
+        fail('A resident account already exists for this household. Only one family member can register per household. Please ask the registered family member to log in, or contact your barangay.', 409);
+    }
+
+    $data = [
+        'first_name'    => $firstName,
+        'last_name'     => $lastName,
+        'barangay'      => $barangay,
+        'purok'         => $purok,
+        'house_no'      => $houseNo,
+        'household_key' => $householdKey,
+        'password'      => $hash,
+        $col            => $contact,
     ];
 } else {
     $table = 'driver';
@@ -157,7 +231,6 @@ if ($role === 'resident') {
         fail('License photo must be a JPG or PNG.');
     }
 
-    $savedFile = null;
     if ($PHOTO_MODE === 'file') {
         if (!is_dir($UPLOAD_DIR_FS) && !mkdir($UPLOAD_DIR_FS, 0755, true)) {
             error_log('register.php: cannot create ' . $UPLOAD_DIR_FS);
@@ -196,18 +269,29 @@ foreach ($data as $key => $value) {
     $vals[]  = $value;
 }
 
-$sql  = "INSERT INTO `$table` (" . implode(',', $names) . ") VALUES (" . implode(',', array_fill(0, count($vals), '?')) . ")";
-$stmt = $conn->prepare($sql);
-if (!$stmt) {
-    error_log('register.php prepare failed: ' . $conn->error);
-    if (!empty($savedFile)) @unlink($savedFile);
-    fail('Could not create the account. Please try again.', 500);
-}
-$stmt->bind_param(str_repeat('s', count($vals)), ...$vals);
+$sql = "INSERT INTO `$table` (" . implode(',', $names) . ") VALUES (" . implode(',', array_fill(0, count($vals), '?')) . ")";
 
-if (!$stmt->execute()) {
-    error_log('register.php insert failed: ' . $stmt->error);
+try {
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        throw new mysqli_sql_exception($conn->error, $conn->errno);
+    }
+    $stmt->bind_param(str_repeat('s', count($vals)), ...$vals);
+    if (!$stmt->execute()) {
+        throw new mysqli_sql_exception($stmt->error, $stmt->errno);
+    }
+} catch (Throwable $e) {
+    error_log('register.php insert failed: ' . $e->getMessage());
     if (!empty($savedFile)) @unlink($savedFile);
+
+    // 1062 = duplicate key. The unique index is the final guard against two
+    // people registering the same household at the same moment.
+    if ((int) $e->getCode() === 1062) {
+        if (str_contains($e->getMessage(), 'uq_resident_household')) {
+            fail('A resident account already exists for this household. Only one family member can register per household.', 409);
+        }
+        fail('That ' . ($type === 'email' ? 'email' : 'number') . ' is already registered.', 409);
+    }
     fail('Could not create the account. Please try again.', 500);
 }
 
