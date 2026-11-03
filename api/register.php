@@ -17,6 +17,7 @@
 
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
 require_once __DIR__ . '/verification_helpers.php';    // contact_is_verified(), json_response()
+require_once __DIR__ . '/password_policy.php';         // validate_password_strength()
 
 // ============================ CONFIG ============================
 $RESIDENT_COLS = [
@@ -84,8 +85,9 @@ if (!in_array($role, ['resident', 'driver'], true)) {
 if ($firstName === '' || $lastName === '' || $barangay === '' || $password === '') {
     fail('Please fill in all required fields.');
 }
-if (strlen($password) < 6) {
-    fail('Password must be at least 6 characters.');
+$pwError = validate_password_strength($password, [$firstName, $lastName, strtok($email, '@') ?: '', $phone]);
+if ($pwError !== null) {
+    fail($pwError);
 }
 if ($email === '' && $phone === '') {
     fail('Please provide an email or mobile number.');
