@@ -19,18 +19,9 @@
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
 require_once __DIR__ . '/verification_helpers.php';    // contact_is_verified(), json_response()
 require_once __DIR__ . '/password_policy.php';         // validate_password_strength()
+require_once __DIR__ . '/household_helpers.php';       // MALITA_BARANGAYS, canonical_barangay(), make_household_key()
 
 // ============================ CONFIG ============================
-// The 30 barangays of Malita, Davao Occidental. Only these are accepted.
-const MALITA_BARANGAYS = [
-    'Bito', 'Bolila', 'Buhangin', 'Culaman', 'Datu Danwata', 'Demoloc',
-    'Felis', 'Fishing Village', 'Kibalatong', 'Kidalapong', 'Kilalag',
-    'Kinangan', 'Lacaron', 'Lagumit', 'Lais', 'Little Baguio', 'Macol',
-    'Mana', 'Manuel Peralta', 'New Argao', 'Pangaleon', 'Pangian',
-    'Pinalpalan', 'Poblacion', 'Sangay', 'Talogoy', 'Tical', 'Ticulon',
-    'Tingolo', 'Tubalan',
-];
-
 $RESIDENT_COLS = [
     'first_name'    => 'first_name',
     'last_name'     => 'last_name',
@@ -70,28 +61,6 @@ function fail(string $msg, int $status = 400): void
 {
     // The app reads 'error'; 'message' is included for consistency with the OTP files.
     json_response(['success' => false, 'error' => $msg, 'message' => $msg], $status);
-}
-
-/** Lowercase, drop filler words and punctuation, collapse spaces. */
-function norm_part(string $s, array $dropWords = []): string
-{
-    $s = mb_strtolower(trim($s));
-    $s = preg_replace('/\bblk\b/u', 'block', $s);
-    foreach ($dropWords as $w) {
-        $s = preg_replace('/\b' . preg_quote($w, '/') . '\b/u', ' ', $s);
-    }
-    $s = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $s);
-    return trim($s);
-}
-
-/** Returns the official spelling of a Malita barangay, or null if not one. */
-function canonical_barangay(string $input): ?string
-{
-    $want = norm_part($input);
-    foreach (MALITA_BARANGAYS as $b) {
-        if (norm_part($b) === $want) return $b;
-    }
-    return null;
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -178,16 +147,10 @@ if ($role === 'resident') {
         fail('Household address must be between 3 and 200 characters.');
     }
 
-    // Household identity = barangay + household address, normalized so that
-    // capitalization, punctuation and spacing differences do not matter
-    // ("Blk 3, Lot 5" / "block 3 lot 5").
-    $addrN = norm_part($householdAddress);
-    if ($addrN === '') {
+    // Household identity = barangay + household address (see household_helpers.php).
+    $householdKey = make_household_key($barangay, $householdAddress);
+    if ($householdKey === null) {
         fail('Please enter a valid household address or landmark.');
-    }
-    $householdKey = norm_part($barangay) . '|' . $addrN;
-    if (mb_strlen($householdKey) > 255) {
-        fail('Household address is too long.');
     }
 
     $h = $conn->prepare("SELECT id FROM resident WHERE household_key = ? LIMIT 1");
