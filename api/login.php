@@ -1,16 +1,16 @@
 <?php
-// POST /api/login.php
+// POST /api/login.php   (patched: returns the full profile)
 // Body: { "email": "...", "password": "..." }
 // ("email" also accepts a phone number - matched against either column)
 //
 // user_type is optional. If omitted, we try resident first, then driver.
-// Pass it explicitly if you want to skip the guesswork (e.g. from a
-// role-specific login screen later).
 //
 // SECURITY: after 5 failed attempts for the same email/phone, login is
 // blocked for 15 minutes (table: login_attempts).
 //
-// Returns: { success: true, token: "...", user: { id, name, email, role, barangay } }
+// Returns: { success: true, token: "...", user: { id, name, email, role, barangay, ...profile } }
+// The original keys (id, name, email, role, barangay) are unchanged so
+// AppUser.fromJson keeps working. New keys are extra.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
@@ -53,7 +53,7 @@ if ($failed >= LOGIN_MAX_ATTEMPTS) {
     json_error('Too many failed attempts. Please try again in ' . LOGIN_LOCK_MINUTES . ' minutes.', 429);
 }
 
-// Try each candidate table in order until we find a matching, verified account.
+// Try each candidate table in order until we find a matching account.
 $candidates = $requestedType !== '' ? [$requestedType] : ['resident', 'driver'];
 
 $user = null;
@@ -96,17 +96,37 @@ $token = generate_token([
     'user_id'   => (int)$user['id'],
 ]);
 
-// Shape the response to exactly match AppUser.fromJson's expected keys:
-// id, name, email, role, barangay (address is not used yet, left null).
+// ---- Profile payload (never include the password hash) ----
+$profile = [
+    'id'          => (int)$user['id'],
+    'name'        => trim($user['first_name'] . ' ' . $user['last_name']),
+    'first_name'  => $user['first_name'],
+    'last_name'   => $user['last_name'],
+    'email'       => $user['email'],
+    'phone'       => $user['phone'] ?? null,
+    'role'        => $userType,
+    'profile_pic' => $user['profile_pic'] ?? null,
+    'created_at'  => $user['created_at'] ?? null,
+];
+
+if ($userType === 'driver') {
+    // Old rows may hold a base64 data URI in license_photo; don't ship that
+    // (it can be megabytes). Only return it when it is a file path.
+    $photo = (string)($user['license_photo'] ?? '');
+    $photoPath = ($photo !== '' && strncmp($photo, 'data:', 5) !== 0) ? $photo : null;
+
+    $profile['barangay']          = $user['assigned_barangay'] ?? null;
+    $profile['assigned_barangay'] = $user['assigned_barangay'] ?? null;
+    $profile['license_number']    = $user['license_number'] ?? null;
+    $profile['license_photo']     = $photoPath;   // e.g. "uploads/licenses/ab12....jpg"
+    $profile['location']          = $user['location'] ?? null;
+} else {
+    $profile['barangay'] = $user['barangay'] ?? null;
+    $profile['purok']    = $user['purok'] ?? null;
+    $profile['house_no'] = $user['house_no'] ?? null;
+}
+
 json_ok([
     'token' => $token,
-    'user'  => [
-        'id'       => (int)$user['id'],
-        'name'     => trim($user['first_name'] . ' ' . $user['last_name']),
-        'email'    => $user['email'],
-        'role'     => $userType,
-        'barangay' => $userType === 'driver'
-            ? ($user['assigned_barangay'] ?? null)
-            : ($user['barangay'] ?? null),
-    ],
+    'user'  => $profile,
 ]);
