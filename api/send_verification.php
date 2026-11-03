@@ -4,14 +4,9 @@
  * Body (JSON): { "contact": "09171234567" }  OR  { "contact": "user@gmail.com" }
  *
  * Detects whether the contact is a phone number or an email, generates a
- * 6-digit OTP, stores it, and sends it via SMS (Semaphore) or email (Gmail SMTP).
+ * 6-digit OTP, stores it, and sends it via SMS (Semaphore) or email (Brevo SMTP).
  *
- * CHANGES FROM YOUR ORIGINAL:
- *  - The "already registered" check queried a `users` table that doesn't
- *    exist in this schema — accounts live in separate `resident` and
- *    `driver` tables. Now checks both.
- *  - Require path fixed: verification_helpers.php lives flat in api/,
- *    right next to this file — no 'includes/' subfolder inside api/.
+ * SECURITY: only one code can be requested per contact every 60 seconds.
  */
 
 require_once __DIR__ . '/../includes/db.php';
@@ -42,6 +37,21 @@ foreach (['resident', 'driver'] as $table) {
             'message' => 'That ' . ($type === 'email' ? 'email' : 'number') . ' is already registered.',
         ], 409);
     }
+}
+
+// Cooldown: codes live for 10 minutes, so an unverified code whose expiry is
+// still more than 9 minutes away was created less than 60 seconds ago.
+$purpose = 'registration';
+$cool = $conn->prepare(
+    "SELECT id FROM verification_codes
+     WHERE contact = ? AND purpose = ? AND verified_at IS NULL
+       AND expires_at > DATE_ADD(NOW(), INTERVAL 9 MINUTE)
+     LIMIT 1"
+);
+$cool->bind_param('ss', $contact, $purpose);
+$cool->execute();
+if ($cool->get_result()->fetch_assoc()) {
+    json_response(['success' => false, 'message' => 'Please wait a minute before requesting another code.'], 429);
 }
 
 $code = generate_otp_code();
