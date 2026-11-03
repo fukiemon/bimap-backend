@@ -7,13 +7,13 @@
  *   first_name, last_name
  *   phone  ("+639XXXXXXXXX")  OR  email
  *   barangay, password
- *   resident only: purok, house_no          (NEW: used for the one-account-per-household rule)
+ *   resident only: household_address        (house no., street or landmark; used for the one-account-per-household rule)
  *   driver only:   license_number, license_photo_base64 (data URI), location
  *
  * The contact must already be verified (verify_code.php) within the last
  * 30 minutes, using the exact same contact string.
  *
- * Run bimap_migration.sql first (adds resident.purok, house_no, household_key).
+ * Run bimap_migration.sql first (adds resident.household_address, household_key).
  */
 
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
@@ -37,8 +37,7 @@ $RESIDENT_COLS = [
     'email'         => 'email',
     'phone'         => 'phone',
     'barangay'      => 'barangay',
-    'purok'         => 'purok',
-    'house_no'      => 'house_no',
+    'household_address' => 'household_address',
     'household_key' => 'household_key',
     'password'      => 'password',
 ];
@@ -110,8 +109,7 @@ $lastName  = trim($in['last_name'] ?? '');
 $email     = trim($in['email'] ?? '');
 $phone     = trim($in['phone'] ?? '');
 $barangay  = trim($in['barangay'] ?? '');
-$purok     = trim($in['purok'] ?? '');
-$houseNo   = trim($in['house_no'] ?? '');
+$householdAddress = trim($in['household_address'] ?? '');
 $password  = (string) ($in['password'] ?? '');
 $licenseNo = trim($in['license_number'] ?? '');
 $photoB64  = (string) ($in['license_photo_base64'] ?? '');
@@ -173,21 +171,24 @@ if ($role === 'resident') {
     $table = 'resident';
     $cols  = $RESIDENT_COLS;
 
-    if ($purok === '' || $houseNo === '') {
-        fail('Please enter your purok and house/lot number.');
+    if ($householdAddress === '') {
+        fail('Please enter your household address or landmark.');
     }
-    if (mb_strlen($purok) > 50 || mb_strlen($houseNo) > 100) {
-        fail('Purok or house/lot number is too long.');
+    if (mb_strlen($householdAddress) < 3 || mb_strlen($householdAddress) > 200) {
+        fail('Household address must be between 3 and 200 characters.');
     }
 
-    // Household identity = barangay + purok + house/lot number, normalized so
-    // "Purok 3" / "purok  3" / "3" and "Blk 3, Lot 5" / "block 3 lot 5" match.
-    $purokN = norm_part($purok, ['purok', 'prk']);
-    $houseN = norm_part($houseNo);
-    if ($purokN === '' || $houseN === '') {
-        fail('Please enter a valid purok and house/lot number.');
+    // Household identity = barangay + household address, normalized so that
+    // capitalization, punctuation and spacing differences do not matter
+    // ("Blk 3, Lot 5" / "block 3 lot 5").
+    $addrN = norm_part($householdAddress);
+    if ($addrN === '') {
+        fail('Please enter a valid household address or landmark.');
     }
-    $householdKey = norm_part($barangay) . '|' . $purokN . '|' . $houseN;
+    $householdKey = norm_part($barangay) . '|' . $addrN;
+    if (mb_strlen($householdKey) > 255) {
+        fail('Household address is too long.');
+    }
 
     $h = $conn->prepare("SELECT id FROM resident WHERE household_key = ? LIMIT 1");
     $h->bind_param('s', $householdKey);
@@ -200,8 +201,7 @@ if ($role === 'resident') {
         'first_name'    => $firstName,
         'last_name'     => $lastName,
         'barangay'      => $barangay,
-        'purok'         => $purok,
-        'house_no'      => $houseNo,
+        'household_address' => $householdAddress,
         'household_key' => $householdKey,
         'password'      => $hash,
         $col            => $contact,
