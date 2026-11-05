@@ -11,6 +11,9 @@
 // Returns: { success: true, token: "...", user: { id, name, email, role, barangay, ...profile } }
 // The original keys (id, name, email, role, barangay) are unchanged so
 // AppUser.fromJson keeps working. New keys are extra.
+//
+// NOTE: drivers no longer have an assigned_barangay column. For drivers,
+// "barangay" now carries the driver's location text.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
@@ -115,8 +118,8 @@ if ($userType === 'driver') {
     $photo = (string)($user['license_photo'] ?? '');
     $photoPath = ($photo !== '' && strncmp($photo, 'data:', 5) !== 0) ? $photo : null;
 
-    $profile['barangay']          = $user['assigned_barangay'] ?? null;
-    $profile['assigned_barangay'] = $user['assigned_barangay'] ?? null;
+    // assigned_barangay was removed: the driver's location text now plays that role.
+    $profile['barangay']          = $user['location'] ?? null;
     $profile['license_number']    = $user['license_number'] ?? null;
     $profile['license_photo']     = $photoPath;   // e.g. "uploads/licenses/ab12....jpg"
     $profile['location']          = $user['location'] ?? null;
