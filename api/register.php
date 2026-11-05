@@ -24,6 +24,8 @@ $RESIDENT_COLS = [
     'last_name'         => 'last_name',
     'email'             => 'email',
     'phone'             => 'phone',
+    'province'          => 'province',
+    'municipality'      => 'municipality',
     'barangay'          => 'barangay',
     'household_address' => 'household_address',
     'household_key'     => 'household_key',
@@ -35,6 +37,8 @@ $DRIVER_COLS = [
     'last_name'         => 'last_name',
     'email'             => 'email',
     'phone'             => 'phone',
+    'province'          => 'province',
+    'municipality'      => 'municipality',
     'barangay'          => 'barangay',            // now saved
     'household_address' => 'household_address',   // now saved
     'password'          => 'password',
@@ -71,6 +75,8 @@ $email     = trim($in['email'] ?? '');
 $phone     = trim($in['phone'] ?? '');
 $barangay  = trim($in['barangay'] ?? '');
 $householdAddress = trim($in['household_address'] ?? '');
+$province     = trim($in['province'] ?? '');
+$municipality = trim($in['municipality'] ?? '');
 $password  = (string) ($in['password'] ?? '');
 $licenseNo = trim($in['license_number'] ?? '');
 $photoB64  = (string) ($in['license_photo_base64'] ?? '');
@@ -125,6 +131,16 @@ foreach (['resident', 'driver'] as $t) {
     }
 }
 
+// Province and municipality (BiMAP only covers Malita, Davao Occidental).
+if (strcasecmp($province, 'Davao Occidental') !== 0) {
+    fail('BiMAP only covers Davao Occidental.');
+}
+if (strcasecmp($municipality, 'Malita') !== 0) {
+    fail('BiMAP only covers Malita.');
+}
+$province     = 'Davao Occidental';
+$municipality = 'Malita';
+
 // Address is required for both roles.
 if ($householdAddress === '' || mb_strlen($householdAddress) < 3 || mb_strlen($householdAddress) > 200) {
     fail('Address / landmark must be between 3 and 200 characters.');
@@ -153,6 +169,8 @@ if ($role === 'resident') {
     $data = [
         'first_name'        => $firstName,
         'last_name'         => $lastName,
+        'province'          => $province,
+        'municipality'      => $municipality,
         'barangay'          => $barangay,
         'household_address' => $householdAddress,
         'household_key'     => $householdKey,
@@ -210,6 +228,8 @@ if ($role === 'resident') {
     $data = [
         'first_name'        => $firstName,
         'last_name'         => $lastName,
+        'province'          => $province,
+        'municipality'      => $municipality,
         'barangay'          => $barangay,
         'household_address' => $householdAddress,
         'password'          => $hash,
