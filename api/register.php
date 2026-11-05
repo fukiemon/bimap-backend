@@ -38,9 +38,8 @@ $DRIVER_COLS = [
     'last_name'      => 'last_name',
     'email'          => 'email',
     'phone'          => 'phone',
-    // login.php reads the driver's barangay from `assigned_barangay`, which the
-    // admin sets on approval. So the barangay picked in the app is NOT saved
-    // for drivers (null = skip). To save it there instead, use 'assigned_barangay'.
+    // assigned_barangay was removed. The driver's barangay now lives inside
+    // `location` (see below), so the barangay field itself is not saved.
     'barangay'       => null,
     'password'       => 'password',
     'license_number' => 'license_number',
@@ -176,6 +175,15 @@ if ($role === 'resident') {
     if ($licenseNo === '') fail("Please enter your driver's license number.");
     if ($photoB64 === '')  fail('Please upload a photo of your license.');
     if ($location === '')  fail('Please provide your location.');
+
+    // Make sure the barangay name is part of the saved location so residents
+    // of that barangay can find this driver's truck.
+    if (stripos($location, $barangay) === false) {
+        $location = $barangay . ', ' . $location;
+    }
+    if (mb_strlen($location) > 200) {
+        $location = mb_substr($location, 0, 200);
+    }
 
     // Validate the photo (data URI, jpg/png, max 5MB).
     if (!preg_match('#^data:image/(png|jpe?g);base64,(.+)$#is', $photoB64, $m)) {
