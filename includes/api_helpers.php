@@ -95,11 +95,36 @@ function get_bearer_token() {
 
 // Call at the top of any endpoint that requires login. Exits with 401 on failure,
 // otherwise returns the token payload (['user_type' => ..., 'user_id' => ..., ...]).
+//
+// For drivers, the database is checked on EVERY request, so suspending (or
+// deleting) a driver cuts them off immediately even though their token is
+// still validly signed.
 function require_auth() {
+    global $conn;
+
     $token = get_bearer_token();
     $payload = verify_token($token);
     if (!$payload) {
         json_error('Unauthorized. Missing or invalid token.', 401);
     }
+
+    if (($payload['user_type'] ?? '') === 'driver') {
+        $driverId = (int)($payload['user_id'] ?? 0);
+        $stmt = $conn->prepare("SELECT is_verified, is_suspended FROM driver WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $driverId);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+
+        if (!$row) {
+            json_error('Account no longer exists.', 401);
+        }
+        if ((int)$row['is_suspended'] === 1) {
+            json_error('Your account has been suspended. Please contact the admin.', 403);
+        }
+        if ((int)$row['is_verified'] === 0) {
+            json_error('Your driver account is still pending admin approval.', 403);
+        }
+    }
+
     return $payload;
 }
