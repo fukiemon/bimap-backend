@@ -1,9 +1,9 @@
 <?php
 // POST /api/update_location.php
 //   {"latitude": 6.41, "longitude": 125.61}  -> save the driver's current position (tracking ON)
-//   {"is_tracking": false}                   -> pause tracking (residents see "paused")
+//   {"is_tracking": false}                   -> end collection (residents stop seeing the truck)
 //
-// Requires: Authorization: Bearer <token> (driver)
+// Requires: Authorization: Bearer <token> (driver approved by the admin)
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
@@ -17,17 +17,26 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     json_error('Method not allowed. Use POST.', 405);
 }
 
+// Only drivers verified by the admin may share a location.
+$v = $conn->prepare("SELECT is_verified FROM driver WHERE id = ?");
+$v->bind_param('i', $driverId);
+$v->execute();
+$drv = $v->get_result()->fetch_assoc();
+if (!$drv || (int) $drv['is_verified'] !== 1) {
+    json_error('Your driver account is not yet approved by the admin.', 403);
+}
+
 $body = json_decode(file_get_contents('php://input'), true);
 if (!is_array($body)) {
     json_error('Invalid JSON body.');
 }
 
-// Pause tracking.
+// End collection / pause tracking.
 if (array_key_exists('is_tracking', $body) && $body['is_tracking'] === false) {
     $stmt = $conn->prepare("UPDATE driver_location SET is_tracking = 0 WHERE driver_id = ?");
     $stmt->bind_param('i', $driverId);
     $stmt->execute();
-    json_ok(['message' => 'Tracking paused.']);
+    json_ok(['message' => 'Collection ended.']);
 }
 
 // Save position.
