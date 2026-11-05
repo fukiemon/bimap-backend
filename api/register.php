@@ -6,14 +6,11 @@
  *   user_type            'resident' | 'driver'
  *   first_name, last_name
  *   phone  ("+639XXXXXXXXX")  OR  email
- *   barangay, password
- *   resident only: household_address        (house no., street or landmark; used for the one-account-per-household rule)
- *   driver only:   license_number, license_photo_base64 (data URI), location
+ *   barangay, password, household_address   (both roles)
+ *   driver only: license_number, license_photo_base64 (data URI), location
  *
  * The contact must already be verified (verify_code.php) within the last
  * 30 minutes, using the exact same contact string.
- *
- * Run bimap_migration.sql first (adds resident.household_address, household_key).
  */
 
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
@@ -23,34 +20,31 @@ require_once __DIR__ . '/household_helpers.php';       // MALITA_BARANGAYS, cano
 
 // ============================ CONFIG ============================
 $RESIDENT_COLS = [
-    'first_name'    => 'first_name',
-    'last_name'     => 'last_name',
-    'email'         => 'email',
-    'phone'         => 'phone',
-    'barangay'      => 'barangay',
+    'first_name'        => 'first_name',
+    'last_name'         => 'last_name',
+    'email'             => 'email',
+    'phone'             => 'phone',
+    'barangay'          => 'barangay',
     'household_address' => 'household_address',
-    'household_key' => 'household_key',
-    'password'      => 'password',
+    'household_key'     => 'household_key',
+    'password'          => 'password',
 ];
 
 $DRIVER_COLS = [
-    'first_name'     => 'first_name',
-    'last_name'      => 'last_name',
-    'email'          => 'email',
-    'phone'          => 'phone',
-    // assigned_barangay was removed. The driver's barangay now lives inside
-    // `location` (see below), so the barangay field itself is not saved.
-    'barangay'       => null,
-    'password'       => 'password',
-    'license_number' => 'license_number',
-    'driver_license' => 'driver_license',   // duplicate column; remove this line if you drop it (see migration)
-    'license_photo'  => 'license_photo',    // stores the file path, see PHOTO_MODE
-    'location'       => 'location',
-    'is_verified'    => 'is_verified',      // 0 = pending admin approval (checked by login.php)
+    'first_name'        => 'first_name',
+    'last_name'         => 'last_name',
+    'email'             => 'email',
+    'phone'             => 'phone',
+    'barangay'          => 'barangay',            // now saved
+    'household_address' => 'household_address',   // now saved
+    'password'          => 'password',
+    'license_number'    => 'license_number',
+    'driver_license'    => 'driver_license',      // duplicate column; remove this line if you drop it
+    'license_photo'     => 'license_photo',
+    'location'          => 'location',
+    'is_verified'       => 'is_verified',         // 0 = pending admin approval
 ];
 
-// How to save the license photo: 'file' = save into a folder and store the
-// path, 'base64' = store the data URI text directly in the license_photo column.
 $PHOTO_MODE    = 'file';
 $UPLOAD_DIR_FS = __DIR__ . '/../uploads/licenses/';
 $UPLOAD_DIR_DB = 'uploads/licenses/';
@@ -58,7 +52,6 @@ $UPLOAD_DIR_DB = 'uploads/licenses/';
 
 function fail(string $msg, int $status = 400): void
 {
-    // The app reads 'error'; 'message' is included for consistency with the OTP files.
     json_response(['success' => false, 'error' => $msg, 'message' => $msg], $status);
 }
 
@@ -132,19 +125,17 @@ foreach (['resident', 'driver'] as $t) {
     }
 }
 
+// Address is required for both roles.
+if ($householdAddress === '' || mb_strlen($householdAddress) < 3 || mb_strlen($householdAddress) > 200) {
+    fail('Address / landmark must be between 3 and 200 characters.');
+}
+
 $hash = password_hash($password, PASSWORD_DEFAULT);
 $savedFile = null;
 
 if ($role === 'resident') {
     $table = 'resident';
     $cols  = $RESIDENT_COLS;
-
-    if ($householdAddress === '') {
-        fail('Please enter your household address or landmark.');
-    }
-    if (mb_strlen($householdAddress) < 3 || mb_strlen($householdAddress) > 200) {
-        fail('Household address must be between 3 and 200 characters.');
-    }
 
     // Household identity = barangay + household address (see household_helpers.php).
     $householdKey = make_household_key($barangay, $householdAddress);
@@ -160,13 +151,13 @@ if ($role === 'resident') {
     }
 
     $data = [
-        'first_name'    => $firstName,
-        'last_name'     => $lastName,
-        'barangay'      => $barangay,
+        'first_name'        => $firstName,
+        'last_name'         => $lastName,
+        'barangay'          => $barangay,
         'household_address' => $householdAddress,
-        'household_key' => $householdKey,
-        'password'      => $hash,
-        $col            => $contact,
+        'household_key'     => $householdKey,
+        'password'          => $hash,
+        $col                => $contact,
     ];
 } else {
     $table = 'driver';
@@ -176,8 +167,7 @@ if ($role === 'resident') {
     if ($photoB64 === '')  fail('Please upload a photo of your license.');
     if ($location === '')  fail('Please provide your location.');
 
-    // Make sure the barangay name is part of the saved location so residents
-    // of that barangay can find this driver's truck.
+    // Keep the barangay name inside the saved location text.
     if (stripos($location, $barangay) === false) {
         $location = $barangay . ', ' . $location;
     }
@@ -211,23 +201,24 @@ if ($role === 'resident') {
         if (file_put_contents($UPLOAD_DIR_FS . $name, $bytes) === false) {
             fail('Could not save the license photo.', 500);
         }
-        $savedFile   = $UPLOAD_DIR_FS . $name;
-        $photoValue  = $UPLOAD_DIR_DB . $name;
+        $savedFile  = $UPLOAD_DIR_FS . $name;
+        $photoValue = $UPLOAD_DIR_DB . $name;
     } else {
         $photoValue = $photoB64;
     }
 
     $data = [
-        'first_name'     => $firstName,
-        'last_name'      => $lastName,
-        'barangay'       => $barangay,
-        'password'       => $hash,
-        'license_number' => $licenseNo,
-        'driver_license' => $licenseNo,
-        'license_photo'  => $photoValue,
-        'location'       => $location,
-        'is_verified'    => 0,
-        $col             => $contact,
+        'first_name'        => $firstName,
+        'last_name'         => $lastName,
+        'barangay'          => $barangay,
+        'household_address' => $householdAddress,
+        'password'          => $hash,
+        'license_number'    => $licenseNo,
+        'driver_license'    => $licenseNo,
+        'license_photo'     => $photoValue,
+        'location'          => $location,
+        'is_verified'       => 0,
+        $col                => $contact,
     ];
 }
 
@@ -255,8 +246,6 @@ try {
     error_log('register.php insert failed: ' . $e->getMessage());
     if (!empty($savedFile)) @unlink($savedFile);
 
-    // 1062 = duplicate key. The unique index is the final guard against two
-    // people registering the same household at the same moment.
     if ((int) $e->getCode() === 1062) {
         if (str_contains($e->getMessage(), 'uq_resident_household')) {
             fail('A resident account already exists for this household. Only one family member can register per household.', 409);
