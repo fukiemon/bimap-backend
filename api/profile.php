@@ -3,7 +3,8 @@
 // POST /api/profile.php  -> update profile info and/or picture
 //   Body (all optional, only fields present are changed):
 //     first_name, last_name, email, phone,
-//     barangay, household_address   (resident AND driver),
+//     province, municipality, barangay, household_address   (resident AND driver),
+//     license_number, license_photo_base64   (drivers only; edited freely, no re-approval)
 //     profile_pic_base64            ("data:image/jpeg;base64,...")
 //
 // Requires: Authorization: Bearer <token> (resident or driver)
@@ -15,8 +16,7 @@
 // Drivers: barangay + household_address are editable too. The driver's
 // `location` text is rebuilt from them so it always matches what they see.
 //
-// Read-only fields (license number/photo, is_verified, etc.) are
-// intentionally NOT editable here.
+// is_verified is intentionally NOT editable here.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 require_once __DIR__ . '/household_helpers.php';
@@ -118,6 +118,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
     }
 
+    // Province / municipality: editable, but BiMAP only covers Malita, Davao Occidental.
+    $province     = array_key_exists('province', $body) ? trim($body['province']) : ($current['province'] ?? 'Davao Occidental');
+    $municipality = array_key_exists('municipality', $body) ? trim($body['municipality']) : ($current['municipality'] ?? 'Malita');
+    if (strcasecmp($province, 'Davao Occidental') !== 0) {
+        json_error('BiMAP only covers Davao Occidental.');
+    }
+    if (strcasecmp($municipality, 'Malita') !== 0) {
+        json_error('BiMAP only covers Malita.');
+    }
+    $province     = 'Davao Occidental';
+    $municipality = 'Malita';
+
     $addressSent = array_key_exists('barangay', $body) || array_key_exists('household_address', $body);
     $newBarangay = array_key_exists('barangay', $body) ? trim($body['barangay']) : ($current['barangay'] ?? '');
     $newAddress  = array_key_exists('household_address', $body)
@@ -146,9 +158,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
         $driverBarangay = $canon;
         $driverAddress  = $newAddress;
-        $location = $newAddress . ', Brgy. ' . $canon . ', Malita, Davao Occidental';
+        $location = $newAddress . ', Brgy. ' . $canon . ', ' . $municipality . ', ' . $province;
         if (mb_strlen($location) > 200) {
             $location = mb_substr($location, 0, 200);
+        }
+    }
+
+    // Driver: license number and photo can be edited directly.
+    $licenseNumberSent = false;
+    $newLicenseNumber  = '';
+    $newLicensePath    = null;
+    if ($table === 'driver') {
+        if (array_key_exists('license_number', $body)) {
+            $newLicenseNumber = trim($body['license_number']);
+            if ($newLicenseNumber === '') {
+                json_error("Driver's license number is required.");
+            }
+            if (mb_strlen($newLicenseNumber) > 50) {
+                json_error('License number is too long.');
+            }
+            $licenseNumberSent = true;
+        }
+        $licB64 = (string) ($body['license_photo_base64'] ?? '');
+        if ($licB64 !== '') {
+            if (!preg_match('#^data:image/(png|jpe?g);base64,(.+)$#is', $licB64, $lm)) {
+                json_error('License photo must be a JPG or PNG.');
+            }
+            $licExt   = strtolower($lm[1]) === 'png' ? 'png' : 'jpg';
+            $licBytes = base64_decode($lm[2], true);
+            if ($licBytes === false || $licBytes === '') {
+                json_error('License photo could not be read.');
+            }
+            if (strlen($licBytes) > 5 * 1024 * 1024) {
+                json_error('License photo must be under 5MB.');
+            }
+            $licMime = (new finfo(FILEINFO_MIME_TYPE))->buffer($licBytes);
+            if (!in_array($licMime, ['image/jpeg', 'image/png'], true)) {
+                json_error('License photo must be a JPG or PNG.');
+            }
+            $licDir = __DIR__ . '/../uploads/licenses/';
+            if (!is_dir($licDir) && !mkdir($licDir, 0755, true)) {
+                json_error('Could not save the license photo.', 500);
+            }
+            $licName = bin2hex(random_bytes(12)) . '.' . $licExt;
+            if (file_put_contents($licDir . $licName, $licBytes) === false) {
+                json_error('Could not save the license photo.', 500);
+            }
+            $newLicensePath = 'uploads/licenses/' . $licName;
         }
     }
 
@@ -165,16 +221,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     if ($table === 'driver') {
         $stmt = $conn->prepare(
-            "UPDATE `driver` SET first_name = ?, last_name = ?, email = ?, phone = ?, barangay = ?, household_address = ?, location = ?, profile_pic = ? WHERE id = ?"
+            "UPDATE `driver` SET first_name = ?, last_name = ?, email = ?, phone = ?, province = ?, municipality = ?, barangay = ?, household_address = ?, location = ?, profile_pic = ? WHERE id = ?"
         );
-        $stmt->bind_param('ssssssssi', $firstName, $lastName, $email, $phone, $driverBarangay, $driverAddress, $location, $profilePicPath, $userId);
+        $stmt->bind_param('ssssssssssi', $firstName, $lastName, $email, $phone, $province, $municipality, $driverBarangay, $driverAddress, $location, $profilePicPath, $userId);
     } else {
         $stmt = $conn->prepare(
-            "UPDATE `resident` SET first_name = ?, last_name = ?, email = ?, phone = ?, profile_pic = ? WHERE id = ?"
+            "UPDATE `resident` SET first_name = ?, last_name = ?, email = ?, phone = ?, province = ?, municipality = ?, profile_pic = ? WHERE id = ?"
         );
-        $stmt->bind_param('sssssi', $firstName, $lastName, $email, $phone, $profilePicPath, $userId);
+        $stmt->bind_param('sssssssi', $firstName, $lastName, $email, $phone, $province, $municipality, $profilePicPath, $userId);
     }
     $stmt->execute();
+
+    // Driver license changes (saved separately from the basic profile fields).
+    if ($table === 'driver' && $licenseNumberSent) {
+        $u = $conn->prepare("UPDATE `driver` SET license_number = ?, driver_license = ? WHERE id = ?");
+        $u->bind_param('ssi', $newLicenseNumber, $newLicenseNumber, $userId);
+        $u->execute();
+    }
+    if ($table === 'driver' && $newLicensePath !== null) {
+        $o = $conn->prepare("SELECT license_photo FROM `driver` WHERE id = ?");
+        $o->bind_param('i', $userId);
+        $o->execute();
+        $oldRow = $o->get_result()->fetch_assoc();
+        $oldPhoto = (string) ($oldRow['license_photo'] ?? '');
+
+        $u = $conn->prepare("UPDATE `driver` SET license_photo = ? WHERE id = ?");
+        $u->bind_param('si', $newLicensePath, $userId);
+        $u->execute();
+
+        // Remove the previous license file (only real files under uploads/).
+        if ($oldPhoto !== '' && strncmp($oldPhoto, 'uploads/', 8) === 0
+            && is_file(__DIR__ . '/../' . $oldPhoto)) {
+            @unlink(__DIR__ . '/../' . $oldPhoto);
+        }
+    }
 
     $row = fetch_profile_row($conn, $table, $userId);
     json_ok(['user' => $row]);
