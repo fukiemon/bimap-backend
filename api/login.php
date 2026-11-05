@@ -94,6 +94,12 @@ if ($userType === 'driver' && (int)($user['is_verified'] ?? 0) === 0) {
     json_error('Your driver account is still pending admin approval.', 403);
 }
 
+// NEW: block suspended drivers (checked after the password so the status
+// is only revealed to someone who knows the correct password).
+if ($userType === 'driver' && (int)($user['is_suspended'] ?? 0) === 1) {
+    json_error('Your account has been suspended. Please contact the admin.', 403);
+}
+
 $token = generate_token([
     'user_type' => $userType,
     'user_id'   => (int)$user['id'],
@@ -118,9 +124,14 @@ if ($userType === 'driver') {
     $photo = (string)($user['license_photo'] ?? '');
     $photoPath = ($photo !== '' && strncmp($photo, 'data:', 5) !== 0) ? $photo : null;
 
+    // The table has both driver_license and license_number; use whichever is filled.
+    $licenseNo = ($user['driver_license'] ?? '') !== ''
+        ? $user['driver_license']
+        : ($user['license_number'] ?? null);
+
     // assigned_barangay was removed: the driver's location text now plays that role.
     $profile['barangay']          = $user['location'] ?? null;
-    $profile['license_number']    = $user['license_number'] ?? null;
+    $profile['license_number']    = $licenseNo;
     $profile['license_photo']     = $photoPath;   // e.g. "uploads/licenses/ab12....jpg"
     $profile['location']          = $user['location'] ?? null;
 } else {
