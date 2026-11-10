@@ -17,24 +17,38 @@ if (!isset($_GET['login'])) {
 require_once 'includes/db.php';
 
 $error = '';
+$MAX_TRIES    = 5;
+$LOCK_SECONDS = 300; // 5 minutes
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email    = trim($_POST['email'] ?? '');
+if (($_SESSION['login_locked_until'] ?? 0) > time()) {
+    $wait = (int)ceil(($_SESSION['login_locked_until'] - time()) / 60);
+    $error = "Too many failed attempts. Try again in $wait minute(s).";
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    $stmt = $conn->prepare("SELECT id, name, password, profile_pic_data FROM admin WHERE email = ?");
-    $stmt->bind_param("s", $email);
+    $stmt = $conn->prepare("SELECT id, name, password, profile_pic_data FROM admin WHERE username = ? LIMIT 1");
+    $stmt->bind_param("s", $username);
     $stmt->execute();
     $admin = $stmt->get_result()->fetch_assoc();
- 
+
     if ($admin && password_verify($password, $admin['password'])) {
+        session_regenerate_id(true);
+        unset($_SESSION['login_fails'], $_SESSION['login_locked_until']);
         $_SESSION['admin_id']   = $admin['id'];
         $_SESSION['admin_name'] = $admin['name'];
         $_SESSION['admin_pic']  = $admin['profile_pic_data'];
         header('Location: admin/dashboard.php');
         exit;
     } else {
-        $error = 'Invalid email or password.';
+        $_SESSION['login_fails'] = ($_SESSION['login_fails'] ?? 0) + 1;
+        if ($_SESSION['login_fails'] >= $MAX_TRIES) {
+            $_SESSION['login_locked_until'] = time() + $LOCK_SECONDS;
+            $_SESSION['login_fails'] = 0;
+            $error = 'Too many failed attempts. Try again in 5 minutes.';
+        } else {
+            $error = 'Invalid username or password.';
+        }
     }
 }
 ?>
@@ -123,6 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         input[type="email"], input[type="password"], input[type="text"] {
             width: 100%;
             padding: 14px 16px;
+            margin-bottom: 18px;
             border: 1px solid #d1d5db;
             border-radius: 8px;
             font-size: 16px;
@@ -136,13 +151,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         /* Show / hide password */
-        .password-wrap { position: relative; margin-bottom: 4px; }
+        .password-wrap { position: relative; }
         .password-wrap input { padding-right: 46px; }
         .toggle-pw {
             position: absolute;
             right: 0;
             top: 0;
-            height: 100%;
+            height: calc(100% - 18px); /* exclude input's bottom margin */
             width: 46px;
             background: none;
             border: none;
@@ -155,7 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-login {
             width: 100%;
             padding: 16px;
-            margin-top: 10px;
+            margin-top: 4px;
             background: linear-gradient(135deg, var(--blue), var(--blue-dark));
             color: white;
             border: none;
@@ -230,13 +245,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
 
                 <form method="POST">
-                    <label>Email Address</label>
-                    <input type="email" name="email" placeholder="admin@malita.gov.ph"
-                           value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" required autofocus>
+                    <label>Username</label>
+                    <input type="text" name="username" placeholder="Enter your username"
+                           value="<?= htmlspecialchars($_POST['username'] ?? '') ?>"
+                           autocomplete="username" required autofocus>
 
                     <label>Password</label>
                     <div class="password-wrap">
-                        <input type="password" name="password" id="password" placeholder="Enter your password" required>
+                        <input type="password" name="password" id="password"
+                               placeholder="Enter your password"
+                               autocomplete="current-password" required>
                         <button type="button" class="toggle-pw" onclick="togglePassword()" aria-label="Show or hide password">
                             <i class="fa-solid fa-eye" id="pwIcon"></i>
                         </button>
