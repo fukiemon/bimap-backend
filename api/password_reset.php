@@ -12,6 +12,9 @@
 //
 // The account type (resident/driver) is looked up on the server.
 //
+// Email matching is BINARY (case-sensitive), same as login.php and
+// register.php. Phone matching is unchanged.
+//
 // Needs: ALTER TABLE password_reset ADD COLUMN attempts ... (see password_reset_update.sql)
 
 require_once __DIR__ . '/../includes/api_helpers.php';
@@ -34,10 +37,11 @@ if ($identifier === '') {
 }
 
 // Finds the account in the resident table first, then driver.
+// BINARY email = ? makes the email match case-sensitive.
 function find_account(mysqli $conn, string $identifier): ?array
 {
     foreach (['resident', 'driver'] as $table) {
-        $stmt = $conn->prepare("SELECT id, first_name, last_name, email FROM `$table` WHERE email = ? OR phone = ? LIMIT 1");
+        $stmt = $conn->prepare("SELECT id, first_name, last_name, email FROM `$table` WHERE BINARY email = ? OR phone = ? LIMIT 1");
         $stmt->bind_param('ss', $identifier, $identifier);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
@@ -59,7 +63,7 @@ if ($action === 'request') {
         // (TTL - 1) minutes from now. In that case quietly do nothing.
         $cool = $conn->prepare(
             "SELECT id FROM password_reset
-             WHERE identifier = ? AND expires_at > DATE_ADD(NOW(), INTERVAL 9 MINUTE) LIMIT 1"
+             WHERE BINARY identifier = ? AND expires_at > DATE_ADD(NOW(), INTERVAL 9 MINUTE) LIMIT 1"
         );
         $cool->bind_param('s', $identifier);
         $cool->execute();
@@ -68,7 +72,7 @@ if ($action === 'request') {
             $type = $user['table'];
 
             // One active code per account: remove older ones.
-            $del = $conn->prepare("DELETE FROM password_reset WHERE identifier = ?");
+            $del = $conn->prepare("DELETE FROM password_reset WHERE BINARY identifier = ?");
             $del->bind_param('s', $identifier);
             $del->execute();
 
@@ -98,7 +102,7 @@ if ($action === 'request') {
 
     $stmt = $conn->prepare(
         "SELECT id, user_type, token, attempts FROM password_reset
-         WHERE identifier = ? AND expires_at >= NOW()
+         WHERE BINARY identifier = ? AND expires_at >= NOW()
          ORDER BY id DESC LIMIT 1"
     );
     $stmt->bind_param('s', $identifier);
@@ -128,7 +132,7 @@ if ($action === 'request') {
 
     // Code is correct. Look up the account and apply the password rules.
     $table = $reset['user_type'] === 'driver' ? 'driver' : 'resident';
-    $stmt = $conn->prepare("SELECT id, first_name, last_name, email FROM `$table` WHERE email = ? OR phone = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT id, first_name, last_name, email FROM `$table` WHERE BINARY email = ? OR phone = ? LIMIT 1");
     $stmt->bind_param('ss', $identifier, $identifier);
     $stmt->execute();
     $account = $stmt->get_result()->fetch_assoc();
@@ -151,10 +155,11 @@ if ($action === 'request') {
     $upd->execute();
 
     // Consume the code, and lift any login lockout for this account.
-    $del = $conn->prepare("DELETE FROM password_reset WHERE identifier = ?");
+    $del = $conn->prepare("DELETE FROM password_reset WHERE BINARY identifier = ?");
     $del->bind_param('s', $identifier);
     $del->execute();
 
+    // The lockout key stays lowercased, matching login.php.
     $key = mb_substr(mb_strtolower($identifier), 0, 150);
     $clr = $conn->prepare("DELETE FROM login_attempts WHERE identifier = ?");
     $clr->bind_param('s', $key);
