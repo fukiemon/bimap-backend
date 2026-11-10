@@ -40,7 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (!$check->get_result()->fetch_assoc()) json_error('Announcement not found.', 404);
 
     $stmt = $conn->prepare(
-        "INSERT INTO resident_hidden_announcement (resident_id, announcement_id) VALUES (?, ?)"
+        "INSERT IGNORE INTO resident_hidden_announcement (resident_id, announcement_id) VALUES (?, ?)"
     );
     $stmt->bind_param('ii', $residentId, $id);
     $stmt->execute();
