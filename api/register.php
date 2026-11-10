@@ -206,6 +206,14 @@ if ($role === 'resident') {
     $cols  = $DRIVER_COLS;
 
     if ($licenseNo === '') fail("Please enter your driver's license number.");
+
+    // Driver's license number must match the LTO format: A00-00-000000
+    // (1 letter, then 2 digits, 2 digits, 6 digits, separated by dashes).
+    $licenseNo = strtoupper($licenseNo);
+    if (!preg_match('/^[A-Z]\d{2}-\d{2}-\d{6}$/', $licenseNo)) {
+        fail("Please enter a valid driver's license number (example: N01-12-123456).");
+    }
+
     if ($photoB64 === '')  fail('Please upload a photo of your license.');
     if ($location === '')  fail('Please provide your location.');
 
