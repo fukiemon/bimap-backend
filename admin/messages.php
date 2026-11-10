@@ -1,6 +1,11 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+
+// Philippine time for everything on this page (PHP and MySQL session).
+date_default_timezone_set('Asia/Manila');
+$conn->query("SET time_zone = '+08:00'");
+
 $page_title='Driver Messages';
 $active_nav='messages';
 
@@ -54,8 +59,8 @@ if ($selected_driver) {
     if ($selected_name === '' && $selectedDriverRow) $selected_name = driver_full_name($selectedDriverRow);
     if ($selected_name === '' && !empty($conversation)) $selected_name=$conversation[0]['driver_name'];
 
-    // Mark as read
-    $upd=$conn->prepare("UPDATE driver_message SET is_read=1 WHERE driver_id=? AND sender='driver'");
+    // Mark the driver's messages as read (and remember WHEN they were read)
+    $upd=$conn->prepare("UPDATE driver_message SET is_read=1, read_at=NOW() WHERE driver_id=? AND sender='driver' AND is_read=0");
     $upd->bind_param("i",$selected_driver);
     $upd->execute();
 }
@@ -114,6 +119,8 @@ body{height:100vh;min-height:0;overflow:hidden}
 .bubble-me{background:#1a73e8;color:white;border-bottom-right-radius:4px}
 .bubble-driver{background:white;color:#0d1b2a;border-bottom-left-radius:4px;border:1.5px solid #e0e8f4}
 .btime{font-size:10px;color:#9baabb;margin-top:2px;font-weight:600}
+.tick{margin-left:4px;font-weight:800;color:#9baabb}
+.tick.seen{color:#1a73e8}
 .chat-input-bar{padding:12px 16px;border-top:1px solid #e0e8f4;background:white;display:flex;gap:10px;align-items:flex-end;flex-shrink:0}
 .chat-textarea{flex:1;border:1.5px solid #e0e8f4;border-radius:20px;padding:10px 14px;font-size:14px;font-family:inherit;font-weight:600;color:#0d1b2a;outline:none;resize:none;max-height:80px;line-height:1.4}
 .chat-textarea:focus{border-color:#1a73e8}
@@ -192,11 +199,13 @@ body{height:100vh;min-height:0;overflow:hidden}
       <?php endif; ?>
       <?php foreach ($conversation as $m):
         $isAdmin=$m['sender']==='admin';
-        $dt=new DateTime($m['created_at']); $timeStr=$dt->format('g:i A');
+        $timeStr=(new DateTime($m['created_at']))->format('g:i A');
+        $isSeen=((int)($m['is_read'] ?? 0)===1);
+        $seenStr=(!empty($m['read_at'])) ? (new DateTime($m['read_at']))->format('g:i A') : '';
       ?>
       <div class="bubble-wrap <?= $isAdmin?'bw-me':'bw-driver' ?>">
         <div class="bubble <?= $isAdmin?'bubble-me':'bubble-driver' ?>"><?= htmlspecialchars($m['message']) ?></div>
-        <div class="btime"><?= $isAdmin?'You':'Driver' ?> • <?= $timeStr ?></div>
+        <div class="btime" data-id="<?= (int)$m['id'] ?>"><?= $isAdmin?'You':'Driver' ?> • <?= $timeStr ?><?php if ($isAdmin): ?><span class="tick <?= $isSeen?'seen':'' ?>"><?= $isSeen ? '✓✓ Seen'.($seenStr?' '.$seenStr:'') : '✓' ?></span><?php endif; ?></div>
       </div>
       <?php endforeach; ?>
     </div>
@@ -269,7 +278,7 @@ function removeEmptyNote() {
     if (note) note.remove();
 }
 
-function escapeAndBuildBubble(msg, sender, time) {
+function escapeAndBuildBubble(msg, sender, time, id) {
     const wrap = document.createElement('div');
     wrap.className = 'bubble-wrap ' + (sender === 'admin' ? 'bw-me' : 'bw-driver');
 
@@ -279,11 +288,28 @@ function escapeAndBuildBubble(msg, sender, time) {
 
     const btime = document.createElement('div');
     btime.className = 'btime';
-    btime.textContent = (sender === 'admin' ? 'You' : 'Driver') + ' • ' + time;
+    btime.dataset.id = id;
+    btime.appendChild(document.createTextNode((sender === 'admin' ? 'You' : 'Driver') + ' • ' + time));
+
+    if (sender === 'admin') {
+        const tick = document.createElement('span');
+        tick.className = 'tick';
+        tick.textContent = '✓';
+        btime.appendChild(tick);
+    }
 
     wrap.appendChild(bubble);
     wrap.appendChild(btime);
     return wrap;
+}
+
+// Turns a sent ✓ into a blue ✓✓ Seen <time>
+function markSeen(id, time) {
+    const t = document.querySelector('.btime[data-id="' + id + '"] .tick');
+    if (t && !t.classList.contains('seen')) {
+        t.classList.add('seen');
+        t.textContent = '✓✓ Seen' + (time ? ' ' + time : '');
+    }
 }
 
 if (form) {
@@ -300,7 +326,7 @@ if (form) {
             .then(data => {
                 if (data.success) {
                     removeEmptyNote();
-                    cm.appendChild(escapeAndBuildBubble(data.message, 'admin', data.time));
+                    cm.appendChild(escapeAndBuildBubble(data.message, 'admin', data.time, data.id));
                     cm.dataset.lastId = data.id;
                     scrollToBottom();
                     ri.value = '';
@@ -325,22 +351,25 @@ if (form) {
     });
 }
 
-// Poll for new driver replies (and admin messages sent from elsewhere) every 4s
+// Poll every 3s: new messages + which of my messages the driver has seen
 if (driverId && cm) {
     setInterval(function () {
-        fetch(`messages_poll.php?driver=${driverId}&after_id=${cm.dataset.lastId}`)
+        fetch('messages_poll.php?driver=' + driverId + '&after_id=' + cm.dataset.lastId)
             .then(r => r.json())
-            .then(msgs => {
-                if (!Array.isArray(msgs) || msgs.length === 0) return;
-                removeEmptyNote();
-                msgs.forEach(m => {
-                    cm.appendChild(escapeAndBuildBubble(m.message, m.sender, m.time));
-                    cm.dataset.lastId = m.id;
-                });
-                scrollToBottom();
+            .then(data => {
+                const msgs = data.messages || [];
+                if (msgs.length) {
+                    removeEmptyNote();
+                    msgs.forEach(m => {
+                        cm.appendChild(escapeAndBuildBubble(m.message, m.sender, m.time, m.id));
+                        cm.dataset.lastId = m.id;
+                    });
+                    scrollToBottom();
+                }
+                (data.seen || []).forEach(s => markSeen(s.id, s.time));
             })
             .catch(() => { /* silent fail, retry next interval */ });
-    }, 4000);
+    }, 3000);
 }
 
 // ---- New Chat modal ----
