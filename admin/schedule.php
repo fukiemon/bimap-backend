@@ -37,6 +37,16 @@ function notify_driver($conn, $driverId) {
     $s->execute();
 }
 
+// Name of the logged-in admin, saved on the assignment so the driver app can
+// show "Assigned by ...". If your admin login stores the name under another
+// session key, add that key to this list.
+function current_admin_name() {
+    foreach (['admin_name', 'admin_username', 'username', 'full_name', 'name'] as $k) {
+        if (!empty($_SESSION[$k])) return mb_substr((string)$_SESSION[$k], 0, 100);
+    }
+    return 'Admin';
+}
+
 function read_form($conn, $TYPES, $DAYS) {
     $driverId = (int)($_POST['driver_id'] ?? 0);
     if ($driverId) {
@@ -130,13 +140,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: schedule.php'); exit;
         }
         $cName = cluster_name($conn, $d['cluster_id']);
+        $by = current_admin_name();
 
         if ($action === 'create') {
             $s = $conn->prepare(
-                "INSERT INTO schedule_assignment (driver_id, collection_type, cluster_id, weeks, days, time_range, places, notes)
-                 VALUES (?,?,?,?,?,?,?,?)"
+                "INSERT INTO schedule_assignment (driver_id, collection_type, cluster_id, weeks, days, time_range, places, notes, assigned_by)
+                 VALUES (?,?,?,?,?,?,?,?,?)"
             );
-            $s->bind_param('isisssss', $d['driver_id'], $d['type'], $d['cluster_id'], $d['weeks'], $d['days'], $d['time'], $d['places'], $d['notes']);
+            $s->bind_param('isissssss', $d['driver_id'], $d['type'], $d['cluster_id'], $d['weeks'], $d['days'], $d['time'], $d['places'], $d['notes'], $by);
             $s->execute();
             $newId = $conn->insert_id;
             notify_driver($conn, $d['driver_id']);
@@ -154,10 +165,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: schedule.php'); exit;
             }
             $s = $conn->prepare(
-                "UPDATE schedule_assignment SET driver_id=?, collection_type=?, cluster_id=?, weeks=?, days=?, time_range=?, places=?, notes=?
+                "UPDATE schedule_assignment SET driver_id=?, collection_type=?, cluster_id=?, weeks=?, days=?, time_range=?, places=?, notes=?, assigned_by=?
                  WHERE id=?"
             );
-            $s->bind_param('isisssssi', $d['driver_id'], $d['type'], $d['cluster_id'], $d['weeks'], $d['days'], $d['time'], $d['places'], $d['notes'], $id);
+            $s->bind_param('isissssssi', $d['driver_id'], $d['type'], $d['cluster_id'], $d['weeks'], $d['days'], $d['time'], $d['places'], $d['notes'], $by, $id);
             $s->execute();
             // Notify the new driver AND the previous one (if it moved).
             notify_driver($conn, $d['driver_id']);
@@ -267,12 +278,13 @@ include '../includes/admin_header.php';
         <th class="th">Weeks</th>
         <th class="th">Days</th>
         <th class="th">Places</th>
+        <th class="th">Assigned by</th>
         <th class="th">Actions</th>
       </tr>
     </thead>
     <tbody>
       <?php if (empty($rows)): ?>
-        <tr><td colspan="7" style="text-align:center;padding:40px;color:#aaa;">No assignments yet.</td></tr>
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:#aaa;">No assignments yet.</td></tr>
       <?php endif; ?>
       <?php foreach ($rows as $r):
           $colors = $TYPE_COLORS[$r['collection_type']] ?? ['#eee', '#333'];
@@ -307,6 +319,7 @@ include '../includes/admin_header.php';
             <?= htmlspecialchars(implode(', ', array_slice($places, 0, 3))) ?><?= count($places) > 3 ? '…' : '' ?>
           </div>
         </td>
+        <td class="td"><?= htmlspecialchars($r['assigned_by'] ?? '—') ?></td>
         <td class="td" style="white-space:nowrap;">
           <button class="btn btn-sm" style="background:#f0f4f8;color:#333;"
                   onclick='openModal(<?= htmlspecialchars(json_encode($payload), ENT_QUOTES) ?>)'>Edit</button>
