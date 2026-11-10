@@ -11,6 +11,9 @@
  *
  * The contact must already be verified (verify_code.php) within the last
  * 30 minutes, using the exact same contact string.
+ *
+ * Email matching is BINARY (case-sensitive): "John@x.com" and "john@x.com"
+ * are treated as different emails. Phone matching is unchanged.
  */
 
 require_once __DIR__ . '/../includes/db.php';          // must define $conn (mysqli)
@@ -121,9 +124,11 @@ if (!contact_is_verified($conn, $contact)) {
 }
 
 // Duplicate check on both tables.
-$col = $type === 'email' ? 'email' : 'phone';
+// Email is compared with BINARY (case-sensitive); phone is compared normally.
+$col   = $type === 'email' ? 'email' : 'phone';
+$match = $type === 'email' ? 'BINARY `email`' : '`phone`';
 foreach (['resident', 'driver'] as $t) {
-    $c = $conn->prepare("SELECT id FROM `$t` WHERE `$col` = ? AND `$col` <> '' LIMIT 1");
+    $c = $conn->prepare("SELECT id FROM `$t` WHERE $match = ? AND `$col` <> '' LIMIT 1");
     $c->bind_param('s', $contact);
     $c->execute();
     if ($c->get_result()->fetch_assoc()) {
