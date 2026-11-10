@@ -2,27 +2,28 @@
 // GET /api/get_truck_location.php
 //
 // LOGGED-IN RESIDENT (Authorization: Bearer <token>):
-//   -> the garbage truck(s) that are collecting AND whose driver location
-//      text contains THIS resident's barangay.
+//   -> the garbage truck(s) whose driver location text contains THIS
+//      resident's barangay.
 //
 // GUEST (no Authorization header at all):
-//   -> every truck that is currently collecting. Guests can only view live tracking.
+//   -> every truck. Guests can only view live tracking.
 //
-// Only trucks with is_tracking = 1 (driver pressed "Start Collection") AND a
-// fresh update (weak signal hides the truck until the signal is back) are returned.
+// A truck is returned for TRUCK_VISIBLE_SECONDS after its last update.
+// The app decides the label:
+//   is_tracking = 1 and age <= 20s  -> Live
+//   is_tracking = 1 and age  > 20s  -> Offline (weak signal / outdated)
+//   is_tracking = 0                 -> Driver paused tracking
 //
 // Response: {"success":true,"trucks":[{truck_id, driver_name, barangay, latitude,
 //            longitude, is_tracking, age_seconds, updated_at}]}
 //
-// "barangay" in the response now carries the driver's location text.
 // age_seconds is calculated by the database (NOW() - updated_at) so server
 // timezone differences can't make a fresh location look old.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
-// A truck whose last update is older than this many seconds is treated as
-// "weak signal" and hidden. It reappears by itself when updates resume.
-const TRUCK_STALE_SECONDS = 30;
+// How long the last known position stays visible to residents.
+const TRUCK_VISIBLE_SECONDS = 600; // 10 minutes
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     json_error('Method not allowed. Use GET.', 405);
@@ -75,15 +76,14 @@ $select =
      JOIN driver d ON d.id = dl.driver_id";
 
 if ($isGuest) {
-    $rows = $conn->query($select . " WHERE dl.is_tracking = 1
-                          AND TIMESTAMPDIFF(SECOND, dl.updated_at, NOW()) <= " . TRUCK_STALE_SECONDS . "
-                          ORDER BY dl.updated_at DESC")
-                 ->fetch_all(MYSQLI_ASSOC);
+    $rows = $conn->query($select . "
+         WHERE TIMESTAMPDIFF(SECOND, dl.updated_at, NOW()) <= " . TRUCK_VISIBLE_SECONDS . "
+         ORDER BY dl.updated_at DESC")
+         ->fetch_all(MYSQLI_ASSOC);
 } else {
     $stmt = $conn->prepare(
         $select . "
-         WHERE dl.is_tracking = 1
-           AND TIMESTAMPDIFF(SECOND, dl.updated_at, NOW()) <= " . TRUCK_STALE_SECONDS . "
+         WHERE TIMESTAMPDIFF(SECOND, dl.updated_at, NOW()) <= " . TRUCK_VISIBLE_SECONDS . "
            AND LOCATE(LOWER(?), LOWER(d.location)) > 0
          ORDER BY dl.updated_at DESC"
     );
