@@ -120,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             font-size: 14.5px;
         }
 
-        input[type="email"], input[type="password"] {
+        input[type="email"], input[type="password"], input[type="text"] {
             width: 100%;
             padding: 14px 16px;
             border: 1px solid #d1d5db;
@@ -134,6 +134,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             outline: none;
             box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.15);
         }
+
+        /* Show / hide password */
+        .password-wrap { position: relative; margin-bottom: 4px; }
+        .password-wrap input { padding-right: 46px; }
+        .toggle-pw {
+            position: absolute;
+            right: 0;
+            top: 0;
+            height: 100%;
+            width: 46px;
+            background: none;
+            border: none;
+            color: #6b7280;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .toggle-pw:hover { color: var(--blue); }
 
         .btn-login {
             width: 100%;
@@ -218,7 +235,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                            value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" required autofocus>
 
                     <label>Password</label>
-                    <input type="password" name="password" placeholder="Enter your password" required>
+                    <div class="password-wrap">
+                        <input type="password" name="password" id="password" placeholder="Enter your password" required>
+                        <button type="button" class="toggle-pw" onclick="togglePassword()" aria-label="Show or hide password">
+                            <i class="fa-solid fa-eye" id="pwIcon"></i>
+                        </button>
+                    </div>
 
                     <button type="submit" class="btn-login">
                         <i class="fa-solid fa-right-to-bracket"></i> SIGN IN
@@ -232,6 +254,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <i class="fa-solid fa-shield-halved"></i> Official LGU Malita System
         </div>
     </div>
+
+    <script>
+    function togglePassword() {
+        const input = document.getElementById('password');
+        const icon  = document.getElementById('pwIcon');
+        const show  = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        icon.classList.toggle('fa-eye', !show);
+        icon.classList.toggle('fa-eye-slash', show);
+    }
+    </script>
 
 </body>
 </html>
