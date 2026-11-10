@@ -2,10 +2,13 @@
 // GET  /api/profile.php  -> the logged-in resident's or driver's own profile
 // POST /api/profile.php  -> update profile info and/or picture
 //   Body (all optional, only fields present are changed):
-//     first_name, last_name, email, phone,
+//     first_name, middle_name, last_name, name_extension, email, phone,
 //     province, municipality, barangay, household_address   (resident AND driver),
 //     license_number, license_photo_base64   (drivers only; edited freely, no re-approval)
 //     profile_pic_base64            ("data:image/jpeg;base64,...")
+//
+//   middle_name and name_extension are optional. Send an empty string to
+//   clear them (they are stored as NULL).
 //
 // Requires: Authorization: Bearer <token> (resident or driver)
 //
@@ -15,6 +18,8 @@
 //
 // Drivers: barangay + household_address are editable too. The driver's
 // `location` text is rebuilt from them so it always matches what they see.
+//
+// Email matching is BINARY (case-sensitive), same as login/register.
 //
 // is_verified is intentionally NOT editable here.
 
@@ -80,6 +85,7 @@ function fetch_profile_row($conn, $table, $userId) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
+    // SELECT * already includes middle_name and name_extension.
     $row = fetch_profile_row($conn, $table, $userId);
     if (!$row) json_error('Account not found.', 404);
     json_ok(['user' => $row]);
@@ -96,9 +102,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $email     = array_key_exists('email', $body) ? trim($body['email']) : ($current['email'] ?? '');
     $phone     = array_key_exists('phone', $body) ? trim($body['phone']) : ($current['phone'] ?? '');
 
+    // Middle name and name extension are optional; empty means "clear it".
+    $middleName = array_key_exists('middle_name', $body)
+        ? trim((string) $body['middle_name'])
+        : trim((string) ($current['middle_name'] ?? ''));
+    $nameExtension = array_key_exists('name_extension', $body)
+        ? trim((string) $body['name_extension'])
+        : trim((string) ($current['name_extension'] ?? ''));
+
     if ($firstName === '' || $lastName === '') {
         json_error('First name and last name are required.');
     }
+    if (mb_strlen($middleName) > 100) {
+        json_error('Middle name must be 100 characters or less.');
+    }
+    if (mb_strlen($nameExtension) > 10) {
+        json_error('Name extension must be 10 characters or less.');
+    }
+    $middleName    = $middleName !== '' ? $middleName : null;
+    $nameExtension = $nameExtension !== '' ? $nameExtension : null;
+
     if ($email === '' && $phone === '') {
         json_error('Either email or phone is required.');
     }
@@ -107,9 +130,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     // Prevent silently colliding with another account's login identifier.
+    // Email is compared with BINARY (case-sensitive); phone is compared normally.
     if ($email !== '' || $phone !== '') {
         $stmt = $conn->prepare(
-            "SELECT id FROM `$table` WHERE id != ? AND ((email != '' AND email = ?) OR (phone != '' AND phone = ?)) LIMIT 1"
+            "SELECT id FROM `$table` WHERE id != ? AND ((email != '' AND BINARY email = ?) OR (phone != '' AND phone = ?)) LIMIT 1"
         );
         $stmt->bind_param('iss', $userId, $email, $phone);
         $stmt->execute();
@@ -221,14 +245,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     if ($table === 'driver') {
         $stmt = $conn->prepare(
-            "UPDATE `driver` SET first_name = ?, last_name = ?, email = ?, phone = ?, province = ?, municipality = ?, barangay = ?, household_address = ?, location = ?, profile_pic = ? WHERE id = ?"
+            "UPDATE `driver` SET first_name = ?, middle_name = ?, last_name = ?, name_extension = ?, email = ?, phone = ?, province = ?, municipality = ?, barangay = ?, household_address = ?, location = ?, profile_pic = ? WHERE id = ?"
         );
-        $stmt->bind_param('ssssssssssi', $firstName, $lastName, $email, $phone, $province, $municipality, $driverBarangay, $driverAddress, $location, $profilePicPath, $userId);
+        $stmt->bind_param('ssssssssssssi', $firstName, $middleName, $lastName, $nameExtension, $email, $phone, $province, $municipality, $driverBarangay, $driverAddress, $location, $profilePicPath, $userId);
     } else {
         $stmt = $conn->prepare(
-            "UPDATE `resident` SET first_name = ?, last_name = ?, email = ?, phone = ?, province = ?, municipality = ?, profile_pic = ? WHERE id = ?"
+            "UPDATE `resident` SET first_name = ?, middle_name = ?, last_name = ?, name_extension = ?, email = ?, phone = ?, province = ?, municipality = ?, profile_pic = ? WHERE id = ?"
         );
-        $stmt->bind_param('sssssssi', $firstName, $lastName, $email, $phone, $province, $municipality, $profilePicPath, $userId);
+        $stmt->bind_param('sssssssssi', $firstName, $middleName, $lastName, $nameExtension, $email, $phone, $province, $municipality, $profilePicPath, $userId);
     }
     $stmt->execute();
 
