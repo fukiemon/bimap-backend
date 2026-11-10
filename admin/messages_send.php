@@ -8,14 +8,32 @@ header('Content-Type: application/json');
 // includes admin_header.php.
 requireAdminLogin();
 
-$driver_id   = intval($_POST['driver_id'] ?? 0);
-$driver_name = trim($_POST['driver_name'] ?? 'Driver');
-$msg         = trim($_POST['reply_msg'] ?? '');
+$driver_id = intval($_POST['driver_id'] ?? 0);
+$msg       = trim($_POST['reply_msg'] ?? '');
 
 if (!$driver_id || $msg === '') {
     echo json_encode(['success' => false, 'error' => 'Invalid input']);
     exit;
 }
+if (mb_strlen($msg) > 500) {
+    echo json_encode(['success' => false, 'error' => 'Message must be 500 characters or less.']);
+    exit;
+}
+
+// The driver must exist and be admin-approved. The name saved with the
+// message comes from the driver's account, not from the browser.
+$chk = $conn->prepare("SELECT first_name, last_name FROM driver WHERE id = ? AND is_verified = 1");
+$chk->bind_param("i", $driver_id);
+$chk->execute();
+$driver = $chk->get_result()->fetch_assoc();
+
+if (!$driver) {
+    echo json_encode(['success' => false, 'error' => 'Driver not found or not verified.']);
+    exit;
+}
+
+$driver_name = trim(($driver['first_name'] ?? '') . ' ' . ($driver['last_name'] ?? ''));
+if ($driver_name === '') $driver_name = 'Driver';
 
 $ins = $conn->prepare("INSERT INTO driver_message (driver_id, driver_name, message, sender) VALUES (?, ?, ?, 'admin')");
 $ins->bind_param("iss", $driver_id, $driver_name, $msg);
