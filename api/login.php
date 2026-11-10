@@ -112,6 +112,27 @@ $token = generate_token([
     'user_id'   => (int)$user['id'],
 ]);
 
+// Turns a stored file path (e.g. "uploads/profiles/ab12.jpg") into a full
+// URL the app can load. profile.php returns "profile_pic_url" in this form;
+// login.php only returned the raw path, which is why the picture vanished
+// after logging out and back in.
+function public_file_url($path): ?string
+{
+    $path = trim((string)$path);
+    if ($path === '' || strncmp($path, 'data:', 5) === 0) {
+        return null;
+    }
+    if (preg_match('#^https?://#i', $path)) {
+        return $path;
+    }
+    $https  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+           || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    $scheme = $https ? 'https' : 'http';
+    $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    // Same format as public_url() in profile.php: scheme://host/<stored path>.
+    return $scheme . '://' . $host . '/' . ltrim($path, '/');
+}
+
 // ---- Profile payload (never include the password hash) ----
 $middleName    = trim((string)($user['middle_name'] ?? ''));
 $nameExtension = trim((string)($user['name_extension'] ?? ''));
@@ -132,6 +153,7 @@ $profile = [
     'phone'       => $user['phone'] ?? null,
     'role'        => $userType,
     'profile_pic' => $user['profile_pic'] ?? null,
+    'profile_pic_url' => public_file_url($user['profile_pic'] ?? null),
     'created_at'  => $user['created_at'] ?? null,
 ];
 
