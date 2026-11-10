@@ -3,6 +3,9 @@
 // Body: { "email": "...", "password": "..." }
 // ("email" also accepts a phone number - matched against either column)
 //
+// Email matching is BINARY (case-sensitive): "John@x.com" and "john@x.com"
+// are different. Phone matching is unchanged.
+//
 // user_type is optional. If omitted, we try resident first, then driver.
 //
 // SECURITY: after 5 failed attempts for the same email/phone, login is
@@ -41,6 +44,8 @@ if ($requestedType !== '' && !in_array($requestedType, ['resident', 'driver'], t
 }
 
 // ---- Lockout check (before any password is tested) ----
+// The lockout key stays lowercased on purpose: it stops someone from
+// dodging the lockout by varying the letter case of the same email.
 $attemptKey = mb_substr(mb_strtolower($identifier), 0, 150);
 $lockMinutes = LOGIN_LOCK_MINUTES;
 
@@ -63,7 +68,9 @@ $user = null;
 $userType = null;
 
 foreach ($candidates as $table) {
-    $stmt = $conn->prepare("SELECT * FROM `$table` WHERE email = ? OR phone = ? LIMIT 1");
+    // BINARY email = ?  -> exact, case-sensitive byte comparison for email.
+    // phone = ?         -> normal comparison, as before.
+    $stmt = $conn->prepare("SELECT * FROM `$table` WHERE BINARY email = ? OR phone = ? LIMIT 1");
     $stmt->bind_param('ss', $identifier, $identifier);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -106,11 +113,21 @@ $token = generate_token([
 ]);
 
 // ---- Profile payload (never include the password hash) ----
+$middleName    = trim((string)($user['middle_name'] ?? ''));
+$nameExtension = trim((string)($user['name_extension'] ?? ''));
+$fullName = trim(implode(' ', array_filter(
+    [$user['first_name'], $middleName, $user['last_name'], $nameExtension],
+    fn($p) => trim((string)$p) !== ''
+)));
+
 $profile = [
     'id'          => (int)$user['id'],
     'name'        => trim($user['first_name'] . ' ' . $user['last_name']),
     'first_name'  => $user['first_name'],
     'last_name'   => $user['last_name'],
+    'middle_name' => $middleName !== '' ? $middleName : null,
+    'name_extension' => $nameExtension !== '' ? $nameExtension : null,
+    'full_name'   => $fullName,   // first + middle + last + extension
     'email'       => $user['email'],
     'phone'       => $user['phone'] ?? null,
     'role'        => $userType,
