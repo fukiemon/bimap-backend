@@ -5,6 +5,7 @@
  * JSON body sent by the Flutter app:
  *   user_type            'resident' | 'driver'
  *   first_name, last_name
+ *   middle_name, name_extension   (both optional, e.g. "Jr.", "III")
  *   phone  ("+639XXXXXXXXX")  OR  email
  *   barangay, password, household_address   (both roles)
  *   driver only: license_number, license_photo_base64 (data URI), location
@@ -25,6 +26,8 @@ require_once __DIR__ . '/household_helpers.php';       // MALITA_BARANGAYS, cano
 $RESIDENT_COLS = [
     'first_name'        => 'first_name',
     'last_name'         => 'last_name',
+    'middle_name'       => 'middle_name',
+    'name_extension'    => 'name_extension',
     'email'             => 'email',
     'phone'             => 'phone',
     'province'          => 'province',
@@ -38,6 +41,8 @@ $RESIDENT_COLS = [
 $DRIVER_COLS = [
     'first_name'        => 'first_name',
     'last_name'         => 'last_name',
+    'middle_name'       => 'middle_name',
+    'name_extension'    => 'name_extension',
     'email'             => 'email',
     'phone'             => 'phone',
     'province'          => 'province',
@@ -74,6 +79,8 @@ if (!is_array($in)) {
 $role      = trim($in['user_type'] ?? 'resident');
 $firstName = trim($in['first_name'] ?? '');
 $lastName  = trim($in['last_name'] ?? '');
+$middleName = trim($in['middle_name'] ?? '');
+$nameExtension = trim($in['name_extension'] ?? '');
 $email     = trim($in['email'] ?? '');
 $phone     = trim($in['phone'] ?? '');
 $barangay  = trim($in['barangay'] ?? '');
@@ -91,6 +98,16 @@ if (!in_array($role, ['resident', 'driver'], true)) {
 if ($firstName === '' || $lastName === '' || $barangay === '' || $password === '') {
     fail('Please fill in all required fields.');
 }
+
+// Middle name and name extension are optional.
+if (mb_strlen($middleName) > 100) {
+    fail('Middle name must be 100 characters or less.');
+}
+if (mb_strlen($nameExtension) > 10) {
+    fail('Name extension must be 10 characters or less.');
+}
+$middleName    = $middleName !== '' ? $middleName : null;
+$nameExtension = $nameExtension !== '' ? $nameExtension : null;
 
 // Only the 30 barangays of Malita are allowed.
 $barangayCanon = canonical_barangay($barangay);
@@ -174,6 +191,8 @@ if ($role === 'resident') {
     $data = [
         'first_name'        => $firstName,
         'last_name'         => $lastName,
+        'middle_name'       => $middleName,
+        'name_extension'    => $nameExtension,
         'province'          => $province,
         'municipality'      => $municipality,
         'barangay'          => $barangay,
@@ -233,6 +252,8 @@ if ($role === 'resident') {
     $data = [
         'first_name'        => $firstName,
         'last_name'         => $lastName,
+        'middle_name'       => $middleName,
+        'name_extension'    => $nameExtension,
         'province'          => $province,
         'municipality'      => $municipality,
         'barangay'          => $barangay,
