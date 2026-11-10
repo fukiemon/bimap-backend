@@ -1,9 +1,94 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+requireAdminLogin(); // before ANY handling below
 
 $page_title = 'Complaints';
 $active_nav = 'complaints';
+
+// ---------------------------------------------------------------------
+// MEDIA ENDPOINTS
+//   complaints.php?media=ID  -> the complaint photo
+//   complaints.php?video=ID  -> the complaint video
+// Photos/videos live in the database as base64 data URIs (photo_data,
+// video_data). Older rows may hold a file path instead, so both work.
+// ---------------------------------------------------------------------
+function send_media_from_value($value, $mimePattern) {
+    $value = trim((string)$value);
+    if ($value === '') { http_response_code(404); exit('No file.'); }
+
+    // Stored in the database as a data URI
+    if (preg_match('#^data:(' . $mimePattern . ');base64,#i', substr($value, 0, 80), $m)) {
+        $bytes = base64_decode(substr($value, strpos($value, ',') + 1), true);
+        if ($bytes === false) { http_response_code(404); exit('Bad file.'); }
+
+        $total = strlen($bytes);
+        $start = 0;
+        $end   = $total - 1;
+
+        // Range support so videos can be played and skipped through
+        if (!empty($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/', $_SERVER['HTTP_RANGE'], $r)) {
+            if ($r[1] !== '') {
+                $start = (int)$r[1];
+                if ($r[2] !== '') $end = min((int)$r[2], $end);
+            } elseif ($r[2] !== '') {
+                $start = max(0, $total - (int)$r[2]);
+            }
+            if ($start > $end || $start >= $total) {
+                http_response_code(416);
+                header("Content-Range: bytes */$total");
+                exit;
+            }
+            http_response_code(206);
+            header("Content-Range: bytes $start-$end/$total");
+        }
+
+        header('Content-Type: ' . strtolower($m[1]));
+        header('Accept-Ranges: bytes');
+        header('Content-Length: ' . ($end - $start + 1));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: private, max-age=3600');
+        echo substr($bytes, $start, $end - $start + 1);
+        exit;
+    }
+
+    // Full URL (for example cloud storage)
+    if (preg_match('#^https?://#i', $value)) {
+        header('Location: ' . $value);
+        exit;
+    }
+
+    // Legacy: relative file path on the server
+    header('Location: ../' . ltrim($value, '/'));
+    exit;
+}
+
+if (isset($_GET['media'])) {
+    $id = (int)$_GET['media'];
+    $s = $conn->prepare("SELECT * FROM complaint WHERE id = ?");
+    $s->bind_param('i', $id);
+    $s->execute();
+    $row = $s->get_result()->fetch_assoc();
+    if (!$row) { http_response_code(404); exit('Not found.'); }
+    $photoVal = !empty($row['photo_data']) ? $row['photo_data'] : ($row['photo'] ?? '');
+    send_media_from_value($photoVal, 'image/(?:jpeg|png|gif|webp)');
+}
+
+if (isset($_GET['video'])) {
+    $id = (int)$_GET['video'];
+    $s = $conn->prepare("SELECT * FROM complaint WHERE id = ?");
+    $s->bind_param('i', $id);
+    $s->execute();
+    $row = $s->get_result()->fetch_assoc();
+    if (!$row) { http_response_code(404); exit('Not found.'); }
+
+    $videoVal = !empty($row['video_data']) ? $row['video_data'] : '';
+    // Legacy rows kept the video path inside the concern text as [Video: path]
+    if ($videoVal === '' && preg_match('/\[Video:\s*([^\]]+)\]/i', (string)($row['concern'] ?? ''), $vm)) {
+        $videoVal = trim($vm[1]);
+    }
+    send_media_from_value($videoVal, 'video/(?:mp4|webm|quicktime|3gpp)');
+}
 
 $success = '';
 $error = '';
@@ -70,9 +155,24 @@ $total = $total_stmt->get_result()->fetch_assoc()['c'];
 $pages = ceil($total / $per_page);
 $offset = ($page - 1) * $per_page;
 
+// The list never loads the heavy photo/video data. It only asks the database
+// whether each one exists (has_photo, has_photo_data, has_video_data).
+$BLOBS = ['photo', 'photo_data', 'video_data'];
+$allCols = [];
+$colRes = $conn->query("SHOW COLUMNS FROM complaint");
+while ($cr = $colRes->fetch_assoc()) $allCols[] = $cr['Field'];
+
+$select = [];
+foreach ($allCols as $col) {
+    if (!in_array($col, $BLOBS, true)) $select[] = "c.`$col`";
+}
+foreach (array_intersect($BLOBS, $allCols) as $b) {
+    $select[] = "(c.`$b` IS NOT NULL AND c.`$b` <> '') AS `has_$b`";
+}
+
 // Joined with the resident's saved profile (password is NOT selected).
 $stmt = $conn->prepare(
-    "SELECT c.*,
+    "SELECT " . implode(', ', $select) . ",
             r.first_name         AS r_first_name,
             r.last_name          AS r_last_name,
             r.email              AS r_email,
@@ -149,7 +249,8 @@ include '../includes/admin_header.php';
             $barangay   = !empty($c['barangay'])   ? $c['barangay']   : ($loc_match[1]  ?? 'Not specified');
             $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : ($type_match[1] ?? '—');
 
-            $has_video = (bool) preg_match('/\[Video:\s*([^\]]+)\]/i', $concern);
+            $has_video = !empty($c['has_video_data']) || (bool) preg_match('/\[Video:\s*([^\]]+)\]/i', $concern);
+            $has_photo = !empty($c['has_photo_data']) || !empty($c['has_photo']);
 
             $description = preg_replace('/\[Location:[^\]]*\]\s*/i', '', $concern);
             $description = preg_replace('/\[Type:[^\]]*\]\s*/i', '', $description);
@@ -160,6 +261,16 @@ include '../includes/admin_header.php';
             $profile_name = trim(($c['r_first_name'] ?? '') . ' ' . ($c['r_last_name'] ?? ''));
             $display_name = $profile_name !== '' ? $profile_name : ($c['resident_name'] ?? 'Unknown');
             $display_phone = !empty($c['r_phone']) ? $c['r_phone'] : ($c['resident_phone'] ?? '—');
+
+            // Data sent to the View popup (the photo and video are loaded
+            // separately from complaints.php?media=ID and ?video=ID).
+            $payload = $c;
+            unset($payload['has_photo_data'], $payload['has_video_data']);
+            $payload['concern']    = $description;
+            $payload['barangay']   = $barangay === 'Not specified' ? '' : $barangay;
+            $payload['waste_type'] = $waste_type === '—' ? '' : $waste_type;
+            $payload['has_photo']  = $has_photo;
+            $payload['has_video']  = $has_video;
         ?>
         <tr>
           <td style="color:#aaa;font-size:12px;">#<?= (int)$c['id'] ?></td>
@@ -176,6 +287,9 @@ include '../includes/admin_header.php';
           <td style="font-size:13px;"><?= htmlspecialchars($waste_type) ?></td>
           <td style="font-size:13px;max-width:260px;" title="<?= htmlspecialchars($description) ?>">
             <?= htmlspecialchars(mb_substr($description, 0, 70)) ?><?= mb_strlen($description) > 70 ? '...' : '' ?>
+            <?php if ($has_photo): ?>
+              <span style="display:inline-block;margin-left:4px;background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;">📷 Photo</span>
+            <?php endif; ?>
             <?php if ($has_video): ?>
               <span style="display:inline-block;margin-left:4px;background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;">🎥 Video</span>
             <?php endif; ?>
@@ -184,10 +298,10 @@ include '../includes/admin_header.php';
             <?= date('M d, Y', strtotime($c['created_at'])) ?>
           </td>
           <td>
-            <button class="btn-view" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c), ENT_QUOTES) ?>)">View</button>
+            <button class="btn-view" onclick="viewComplaint(<?= htmlspecialchars(json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE), ENT_QUOTES) ?>)">View</button>
             <?php if ($c['status'] === 'Pending'): ?>
             <button class="btn btn-success btn-sm" style="margin-left:4px;"
-                    onclick="resolveComplaint(<?= (int)$c['id'] ?>, <?= htmlspecialchars(json_encode($display_name), ENT_QUOTES) ?>)">
+                    onclick="resolveComplaint(<?= (int)$c['id'] ?>, <?= htmlspecialchars(json_encode($display_name, JSON_INVALID_UTF8_SUBSTITUTE), ENT_QUOTES) ?>)">
               Resolve
             </button>
             <?php endif; ?>
@@ -250,24 +364,10 @@ function esc(s) {
 }
 
 function viewComplaint(c) {
-  const concernText = c.concern || '';
+  const barangay    = c.barangay    || '—';
+  const wasteType   = c.waste_type  || '—';
+  const description = (c.concern || '').trim();
 
-  // Older complaints may still have these tags inside the free-text concern.
-  const locMatch   = concernText.match(/\[Location:\s*([^\]]+)\]/i);
-  const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
-  const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
-
-  const barangay  = c.barangay   || (locMatch  ? locMatch[1]  : '—');
-  const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
-  const videoPath = videoMatch ? videoMatch[1].trim() : null;
-
-  let description = concernText
-    .replace(/\[Location:[^\]]*\]\s*/i, '')
-    .replace(/\[Type:[^\]]*\]\s*/i, '')
-    .replace(/\[Video:[^\]]*\]\s*/i, '')
-    .trim();
-
-  // Resident profile details (from the joined resident table)
   const fullName = [c.r_first_name, c.r_last_name].filter(Boolean).join(' ')
                    || c.resident_name || '—';
 
@@ -283,32 +383,34 @@ function viewComplaint(c) {
       </div>
     </div>`;
 
-  // Photo
+  const mediaUrl = 'complaints.php?media=' + encodeURIComponent(c.id);
+  const videoUrl = 'complaints.php?video=' + encodeURIComponent(c.id);
+
   let photoHTML = '';
-  if (c.photo && c.photo.trim() !== '') {
+  if (c.has_photo) {
     photoHTML = `
       <div style="margin:15px 0;">
         <strong>📷 Attached Photo:</strong><br>
-        <img src="../${esc(c.photo)}"
+        <img src="${mediaUrl}"
              style="max-width:100%;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
-             onclick="window.open('../${esc(c.photo)}', '_blank')"
+             onclick="window.open('${mediaUrl}', '_blank')"
+             onerror="this.outerHTML='<div style=&quot;color:#b91c1c;font-size:13px;margin-top:8px;&quot;>The photo could not be loaded (the file may no longer exist on the server).</div>'"
              alt="Complaint Photo">
       </div>`;
   }
 
-  // Video
   let videoHTML = '';
-  if (videoPath) {
+  if (c.has_video) {
     videoHTML = `
       <div style="margin:15px 0;">
         <strong>🎥 Attached Video:</strong><br>
-        <video controls playsinline
+        <video controls playsinline preload="metadata"
                style="max-width:100%;width:100%;border-radius:10px;border:2px solid #ede9fe;margin-top:8px;background:#000;">
-          <source src="../${esc(videoPath)}">
+          <source src="${videoUrl}">
           Your browser does not support the video tag.
         </video>
         <div style="margin-top:6px;">
-          <a href="../${esc(videoPath)}" target="_blank" download
+          <a href="${videoUrl}" target="_blank" download
              style="font-size:12px;color:#7c3aed;font-weight:700;text-decoration:none;">
             ⬇️ Download Video
           </a>
