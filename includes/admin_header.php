@@ -146,15 +146,24 @@ if (isset($conn)) {
     .nav-item { padding: 7px 16px; font-size: 13px; }
   }
 
-  /* MAIN CONTENT */
-  .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  /* MAIN CONTENT
+     NOTE: no "overflow: hidden" here. An overflow value other than "visible"
+     turns this element into the scroll container that .page-header sticks to,
+     and since it never scrolls, the header could never stay in place.
+     min-width: 0 is what stops wide content from stretching the layout. */
+  .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-  /* HEADER */
+  /* HEADER
+     Sticks right under the 30px top bar while the page scrolls. */
   .page-header {
     background: white;
     border-bottom: 1px solid #e0e7ef;
     padding: 14px 28px;
     display: flex; align-items: center; justify-content: space-between;
+    position: sticky;
+    top: 30px;
+    z-index: 40;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
   }
   .page-header h1 { font-size: 22px; font-weight: 900; color: #1a1a2e; }
   .admin-info { display: flex; align-items: center; gap: 10px; }
