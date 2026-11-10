@@ -1,12 +1,14 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+requireAdminLogin(); // before ANY handling below
 
 $page_title = 'Settings';
 $active_nav = 'settings';
 
 $success = '';
 $error = '';
+$adminId = (int)$_SESSION['admin_id'];
 
 // Change password
 if (isset($_POST['change_password'])) {
@@ -14,30 +16,30 @@ if (isset($_POST['change_password'])) {
     $new_pw = $_POST['new_password'] ?? '';
     $confirm = $_POST['confirm_password'] ?? '';
 
-    $admin = $conn->query("SELECT password FROM admin WHERE id=" . (int)$_SESSION['admin_id'])->fetch_assoc();
-    if (!password_verify($current, $admin['password'])) {
+    $s = $conn->prepare("SELECT password FROM admin WHERE id = ?");
+    $s->bind_param('i', $adminId);
+    $s->execute();
+    $admin = $s->get_result()->fetch_assoc();
+
+    if (!$admin || !password_verify($current, $admin['password'])) {
         $error = 'Current password is incorrect.';
-    } elseif (strlen($new_pw) < 6) {
-        $error = 'New password must be at least 6 characters.';
+    } elseif (strlen($new_pw) < 8) {
+        $error = 'New password must be at least 8 characters.';
     } elseif ($new_pw !== $confirm) {
         $error = 'Passwords do not match.';
     } else {
         $hash = password_hash($new_pw, PASSWORD_DEFAULT);
-        $conn->query("UPDATE admin SET password='$hash' WHERE id=" . (int)$_SESSION['admin_id']);
+        $u = $conn->prepare("UPDATE admin SET password = ? WHERE id = ?");
+        $u->bind_param('si', $hash, $adminId);
+        $u->execute();
         $success = 'Password updated successfully!';
     }
 }
 
 // Update profile picture
 //
-// NOTE: this used to save the upload to ../uploads/admin_profiles/ on disk
-// and store just the relative path in the DB. That breaks on Render (and
-// any container host): the container's local filesystem is not persistent,
-// so anything written here disappears the next time the container restarts
-// or redeploys — even though the DB path still points at it. The fix is to
-// store the image itself (as a base64 data URI) directly in the database,
-// the same pattern already used for driver license photos and complaint
-// photos elsewhere in this schema.
+// The image is stored as a base64 data URI in the database (not on disk),
+// because the container filesystem on Render is not persistent.
 if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
     $file = $_FILES['profile_pic'];
 
@@ -64,7 +66,7 @@ if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
                 $dataUri = 'data:' . $mimeType . ';base64,' . base64_encode($imageBytes);
 
                 $stmt = $conn->prepare("UPDATE admin SET profile_pic_data=? WHERE id=?");
-                $stmt->bind_param("si", $dataUri, $_SESSION['admin_id']);
+                $stmt->bind_param("si", $dataUri, $adminId);
 
                 if ($stmt->execute()) {
                     $_SESSION['admin_pic'] = $dataUri;
@@ -80,52 +82,45 @@ if (isset($_POST['update_pic']) && isset($_FILES['profile_pic'])) {
 // Update name
 if (isset($_POST['update_name'])) {
     $name = trim($_POST['admin_name'] ?? '');
-    if ($name) {
-        $conn->query("UPDATE admin SET name='" . $conn->real_escape_string($name) . "' WHERE id=" . (int)$_SESSION['admin_id']);
+    if ($name !== '') {
+        $u = $conn->prepare("UPDATE admin SET name = ? WHERE id = ?");
+        $u->bind_param('si', $name, $adminId);
+        $u->execute();
         $_SESSION['admin_name'] = $name;
         $success = 'Profile updated successfully!';
     }
 }
 
-// Create new admin account
+// Create new admin account (username + password, no email)
 if (isset($_POST['create_admin'])) {
     $new_name     = trim($_POST['new_admin_name'] ?? '');
     $new_username = trim($_POST['new_admin_username'] ?? '');
-    $new_email    = trim($_POST['new_admin_email'] ?? '');
     $new_pw       = $_POST['new_admin_password'] ?? '';
     $new_confirm  = $_POST['new_admin_confirm_password'] ?? '';
 
-    if (empty($new_name) || empty($new_username) || empty($new_email) || empty($new_pw)) {
-        $error = 'Name, username, email, and password are required.';
-    } elseif (!filter_var($new_email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Please enter a valid email address.';
-    } elseif (strlen($new_pw) < 6) {
-        $error = 'Password must be at least 6 characters.';
+    if ($new_name === '' || $new_username === '' || $new_pw === '') {
+        $error = 'Name, username, and password are required.';
+    } elseif (!preg_match('/^[A-Za-z0-9._-]{4,30}$/', $new_username)) {
+        $error = 'Username must be 4-30 characters: letters, numbers, dot, dash or underscore.';
+    } elseif (strlen($new_pw) < 8) {
+        $error = 'Password must be at least 8 characters.';
     } elseif ($new_pw !== $new_confirm) {
         $error = 'Passwords do not match.';
     } else {
-        $escaped_username = $conn->real_escape_string($new_username);
-        $escaped_email    = $conn->real_escape_string($new_email);
+        $check = $conn->prepare("SELECT id FROM admin WHERE username = ?");
+        $check->bind_param('s', $new_username);
+        $check->execute();
 
-        // Check if username already exists
-        $check_user  = $conn->query("SELECT id FROM admin WHERE username='$escaped_username'");
-        // Check if email already exists
-        $check_email = $conn->query("SELECT id FROM admin WHERE email='$escaped_email'");
-
-        if ($check_user && $check_user->num_rows > 0) {
+        if ($check->get_result()->num_rows > 0) {
             $error = 'Username already exists. Please choose a different one.';
-        } elseif ($check_email && $check_email->num_rows > 0) {
-            $error = 'Email already exists. Please use a different email.';
         } else {
-            $escaped_name = $conn->real_escape_string($new_name);
-            $hashed_pw    = password_hash($new_pw, PASSWORD_DEFAULT);
-
-            $result = $conn->query(
-                "INSERT INTO admin (name, username, email, password, created_at)
-                 VALUES ('$escaped_name', '$escaped_username', '$escaped_email', '$hashed_pw', NOW())"
+            $hashed_pw = password_hash($new_pw, PASSWORD_DEFAULT);
+            $ins = $conn->prepare(
+                "INSERT INTO admin (name, username, password, created_at) VALUES (?, ?, ?, NOW())"
             );
+            $ins->bind_param('sss', $new_name, $new_username, $hashed_pw);
 
-            if ($result) {
+            if ($ins->execute()) {
                 $success = "Admin account for '$new_name' created successfully!";
             } else {
                 $error = 'Failed to create admin account. Please try again.';
@@ -187,15 +182,15 @@ include '../includes/admin_header.php';
       <form method="POST">
         <div class="form-group">
           <label>Current Password</label>
-          <input type="password" name="current_password" class="form-control" required>
+          <input type="password" name="current_password" class="form-control" autocomplete="current-password" required>
         </div>
         <div class="form-group">
           <label>New Password</label>
-          <input type="password" name="new_password" class="form-control" required>
+          <input type="password" name="new_password" class="form-control" autocomplete="new-password" placeholder="Min. 8 characters" required>
         </div>
         <div class="form-group">
           <label>Confirm New Password</label>
-          <input type="password" name="confirm_password" class="form-control" required>
+          <input type="password" name="confirm_password" class="form-control" autocomplete="new-password" required>
         </div>
         <button type="submit" name="change_password" class="btn btn-primary">Update Password</button>
       </form>
@@ -223,31 +218,20 @@ include '../includes/admin_header.php';
           <input type="text" name="new_admin_username" class="form-control"
                  placeholder="e.g. juandc"
                  value="<?= htmlspecialchars($_POST['new_admin_username'] ?? '') ?>"
-                 required>
+                 autocomplete="off" required>
         </div>
-
-        <div class="form-group">
-          <label>Email Address <span style="color:red;">*</span></label>
-          <input type="email" name="new_admin_email" class="form-control"
-                 placeholder="e.g. juan@example.com"
-                 value="<?= htmlspecialchars($_POST['new_admin_email'] ?? '') ?>"
-                 required>
-        </div>
-
-        <!-- Spacer to keep grid aligned -->
-        <div></div>
 
         <div class="form-group">
           <label>Password <span style="color:red;">*</span></label>
           <input type="password" name="new_admin_password" class="form-control"
-                 placeholder="Min. 6 characters"
+                 placeholder="Min. 8 characters" autocomplete="new-password"
                  required>
         </div>
 
         <div class="form-group">
           <label>Confirm Password <span style="color:red;">*</span></label>
           <input type="password" name="new_admin_confirm_password" class="form-control"
-                 placeholder="Re-enter password"
+                 placeholder="Re-enter password" autocomplete="new-password"
                  required>
         </div>
 
