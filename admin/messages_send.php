@@ -8,6 +8,10 @@ header('Content-Type: application/json');
 // includes admin_header.php.
 requireAdminLogin();
 
+// Philippine time for PHP and the MySQL session, so created_at is real local time.
+date_default_timezone_set('Asia/Manila');
+$conn->query("SET time_zone = '+08:00'");
+
 $driver_id = intval($_POST['driver_id'] ?? 0);
 $msg       = trim($_POST['reply_msg'] ?? '');
 
