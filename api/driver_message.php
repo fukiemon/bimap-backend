@@ -10,6 +10,10 @@
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
+// Philippine time for PHP and the MySQL session, so created_at / read_at are real local time.
+date_default_timezone_set('Asia/Manila');
+$conn->query("SET time_zone = '+08:00'");
+
 $auth = require_auth();
 if ($auth['user_type'] !== 'driver') {
     json_error('Only drivers can use this endpoint.', 403);
@@ -41,9 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $newId = $conn->insert_id;
 
     // Read back the row's own created_at (set by the DB's DEFAULT
-    // CURRENT_TIMESTAMP) rather than using PHP's time. This is the
-    // authoritative send time — the app uses it instead of the device
-    // clock so the timestamp shown is always real and accurate.
+    // CURRENT_TIMESTAMP) rather than using the device clock. This is the
+    // authoritative send time.
     $sel = $conn->prepare("SELECT created_at FROM driver_message WHERE id = ?");
     $sel->bind_param('i', $newId);
     $sel->execute();
@@ -67,22 +70,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         json_ok(['unread' => $unread]);
     }
 
+    // Opening the full conversation means the driver has now seen every
+    // admin reply in it. Mark them read (and record WHEN) BEFORE selecting,
+    // so the response already includes the fresh read state.
+    $read = $conn->prepare(
+        "UPDATE driver_message SET is_read = 1, read_at = NOW()
+         WHERE driver_id = ? AND sender = 'admin' AND is_read = 0"
+    );
+    $read->bind_param('i', $driverId);
+    $read->execute();
+
     $stmt = $conn->prepare(
-        "SELECT id, sender, message, created_at FROM driver_message
+        "SELECT id, sender, message, created_at, is_read, read_at FROM driver_message
          WHERE driver_id = ? ORDER BY created_at ASC LIMIT 200"
     );
     $stmt->bind_param('i', $driverId);
     $stmt->execute();
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-
-    // Opening the full conversation means the driver has now seen every
-    // admin reply in it, so clear the unread flag those rows were counted
-    // under above.
-    $read = $conn->prepare(
-        "UPDATE driver_message SET is_read = 1 WHERE driver_id = ? AND sender = 'admin' AND is_read = 0"
-    );
-    $read->bind_param('i', $driverId);
-    $read->execute();
 
     json_ok(['messages' => $rows]);
 
