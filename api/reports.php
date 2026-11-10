@@ -1,83 +1,178 @@
 <?php
-// GET  /api/reports.php               -> list the logged-in resident's own reports
-// GET  /api/reports.php?id=5          -> a single report (must belong to the resident)
-// POST /api/reports.php                -> create a new complaint/report
-//   Body: { "concern", "barangay", "waste_type", "location_str",
-//            "photo_base64": "data:image/jpeg;base64,..." }  (photo optional)
+// GET  /api/reports.php  -> the logged-in resident's own complaints
+// POST /api/reports.php  -> submit a new complaint
+//        JSON body: concern, waste_type, barangay,
+//                   photo_base64 (optional data URI), video_base64 (optional data URI)
 //
-// Requires: Authorization: Bearer <token> (resident)
+// Photos and videos are stored INSIDE the database as base64 data URIs,
+// because files saved on Render's disk disappear on every restart/redeploy.
 
 require_once __DIR__ . '/../includes/api_helpers.php';
 
 $auth = require_auth();
-if ($auth['user_type'] !== 'resident') {
-    json_error('Only residents can submit or view reports through this endpoint.', 403);
+if (($auth['user_type'] ?? '') === 'driver') {
+    json_error('Only residents can file or view reports.', 403);
 }
-$residentId = (int) $auth['user_id'];
+$residentId = (int)$auth['user_id'];
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+const BLOB_COLUMNS    = ['photo', 'photo_data', 'video_data'];
+const MAX_PHOTO_BYTES = 6 * 1024 * 1024; // decoded size
+const MAX_VIDEO_BYTES = 6 * 1024 * 1024; // decoded size
 
-    if (isset($_GET['id'])) {
-        $id = (int) $_GET['id'];
-        $stmt = $conn->prepare("SELECT * FROM complaint WHERE id = ? AND resident_id = ?");
-        $stmt->bind_param('ii', $id, $residentId);
-        $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-        if (!$row) json_error('Report not found.', 404);
-        json_ok(['report' => $row]);
+$ALLOWED_TYPES = [
+    'missed_collection', 'illegal_dumping', 'overflowing_bin',
+    'improper_segregation', 'burning_waste', 'blocked_drainage', 'other',
+];
+
+// Column names that really exist on `complaint`, so this file works whether
+// the photo column is called photo_data or photo.
+function complaint_columns($conn) {
+    $cols = [];
+    $res = $conn->query("SHOW COLUMNS FROM complaint");
+    while ($r = $res->fetch_assoc()) $cols[] = $r['Field'];
+    return $cols;
+}
+
+// Validates a base64 data URI. Returns [value|null, errorMessage|null].
+function check_data_uri($value, $mimeRegex, $maxBytes, $label) {
+    $value = trim((string)$value);
+    if ($value === '') return [null, null];
+
+    if (!preg_match('#^data:(' . $mimeRegex . ');base64,#i', substr($value, 0, 80))) {
+        return [null, "The $label format is not supported."];
     }
+    $comma = strpos($value, ',');
+    $raw = base64_decode(substr($value, $comma + 1), true);
+    if ($raw === false || $raw === '') {
+        return [null, "The $label could not be read. Please try again."];
+    }
+    if (strlen($raw) > $maxBytes) {
+        return [null, "The $label is too large (max " . round($maxBytes / 1048576) . " MB)."];
+    }
+    return [$value, null];
+}
 
-    $stmt = $conn->prepare("SELECT * FROM complaint WHERE resident_id = ? ORDER BY created_at DESC");
-    $stmt->bind_param('i', $residentId);
-    $stmt->execute();
-    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    json_ok(['reports' => $rows]);
+$cols = complaint_columns($conn);
 
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-    $body = get_json_body();
-    $concern = trim($body['concern'] ?? '');
-    if ($concern === '') json_error('Field "concern" is required.');
-
-    // Look up the resident's own name/phone/barangay so the admin panel (which
-    // reads resident_name/resident_phone/barangay directly off the complaint
-    // row) shows accurate info even if the resident didn't resend it.
-    $stmt = $conn->prepare("SELECT first_name, last_name, phone, barangay FROM resident WHERE id = ?");
-    $stmt->bind_param('i', $residentId);
-    $stmt->execute();
-    $resident = $stmt->get_result()->fetch_assoc();
-    if (!$resident) json_error('Resident account not found.', 404);
-
-    $residentName  = trim($resident['first_name'] . ' ' . $resident['last_name']) ?: 'Unknown Resident';
-    $residentPhone = $resident['phone'] ?: 'No phone';
-    $barangay      = trim($body['barangay'] ?? $resident['barangay'] ?? '') ?: 'Not specified';
-    $wasteType     = trim($body['waste_type'] ?? '') ?: null;
-    $locationStr   = trim($body['location_str'] ?? '') ?: null;
-
-    // Mobile apps typically send photos as base64 rather than multipart file
-    // uploads, so we store it straight into complaint.photo_data (the column
-    // already reserved for this) rather than writing a file to disk.
-    $photoData = $body['photo_base64'] ?? null;
-    if ($photoData && preg_match('/^data:image\/\w+;base64,/', $photoData)) {
-        // keep the data URI as-is - it's ready to drop straight into an <img src="">
-    } elseif ($photoData) {
-        $photoData = 'data:image/jpeg;base64,' . $photoData;
+// ------------------------------------------------------------------ GET
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    // Never send the heavy photo/video data in the list, only flags saying
+    // whether the report has one.
+    $select = [];
+    foreach ($cols as $c) {
+        if (!in_array($c, BLOB_COLUMNS, true)) $select[] = "`$c`";
+    }
+    foreach (array_intersect(BLOB_COLUMNS, $cols) as $b) {
+        $select[] = "(`$b` IS NOT NULL AND `$b` <> '') AS `has_$b`";
     }
 
     $stmt = $conn->prepare(
-        "INSERT INTO complaint (resident_id, resident_name, resident_phone, barangay, concern, photo_data, waste_type, location_str, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')"
+        "SELECT " . implode(', ', $select) . "
+         FROM complaint
+         WHERE resident_id = ?
+         ORDER BY created_at DESC"
     );
-    $stmt->bind_param('isssssss', $residentId, $residentName, $residentPhone, $barangay, $concern, $photoData, $wasteType, $locationStr);
+    $stmt->bind_param('i', $residentId);
     $stmt->execute();
-    $newId = $conn->insert_id;
 
-    json_ok(['report' => [
-        'id' => $newId, 'resident_id' => $residentId, 'resident_name' => $residentName,
-        'resident_phone' => $residentPhone, 'barangay' => $barangay, 'concern' => $concern,
-        'waste_type' => $wasteType, 'location_str' => $locationStr, 'status' => 'Pending',
-    ]], 201);
-
-} else {
-    json_error('Method not allowed. Use GET or POST.', 405);
+    $reports = [];
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $r) {
+        $r['has_photo'] = !empty($r['has_photo_data']) || !empty($r['has_photo']);
+        $r['has_video'] = !empty($r['has_video_data']);
+        unset($r['has_photo_data'], $r['has_video_data']);
+        $reports[] = $r;
+    }
+    json_ok(['reports' => $reports]);
 }
+
+// ------------------------------------------------------------------ POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    json_error('Method not allowed.', 405);
+}
+
+$in = json_decode(file_get_contents('php://input'), true);
+if (!is_array($in)) {
+    json_error('Invalid request. The photo or video may be too large to upload.', 400);
+}
+
+$concern   = mb_substr(trim((string)($in['concern'] ?? '')), 0, 2000);
+$wasteType = trim((string)($in['waste_type'] ?? ''));
+$barangay  = mb_substr(trim((string)($in['barangay'] ?? '')), 0, 100);
+
+if (!in_array($wasteType, $ALLOWED_TYPES, true)) json_error('Please choose a type of waste.', 400);
+if ($barangay === '') json_error('Please select a barangay.', 400);
+if ($wasteType === 'other' && $concern === '') json_error('Please describe the issue.', 400);
+
+// Photo (accepts the older key names too)
+$photoIn = $in['photo_base64'] ?? $in['photo_data'] ?? $in['photo'] ?? '';
+[$photo, $photoErr] = check_data_uri($photoIn, 'image/(?:jpeg|png|gif|webp)', MAX_PHOTO_BYTES, 'photo');
+if ($photoErr) json_error($photoErr, 400);
+
+// Video
+$videoIn = $in['video_base64'] ?? $in['video_data'] ?? '';
+[$video, $videoErr] = check_data_uri($videoIn, 'video/(?:mp4|quicktime|3gpp|webm)', MAX_VIDEO_BYTES, 'video');
+if ($videoErr) json_error($videoErr, 400);
+
+$photoCol = in_array('photo_data', $cols, true) ? 'photo_data' : (in_array('photo', $cols, true) ? 'photo' : null);
+if ($photo !== null && $photoCol === null) {
+    json_error('Photo uploads are not set up on the server yet.', 500);
+}
+if ($video !== null && !in_array('video_data', $cols, true)) {
+    json_error('Video uploads are not set up on the server yet. Add the video_data column first.', 500);
+}
+
+// The resident's name and phone are stored on the complaint too.
+$p = $conn->prepare("SELECT first_name, last_name, phone FROM resident WHERE id = ? LIMIT 1");
+$p->bind_param('i', $residentId);
+$p->execute();
+$res = $p->get_result()->fetch_assoc() ?: [];
+$residentName  = trim(($res['first_name'] ?? '') . ' ' . ($res['last_name'] ?? ''));
+$residentPhone = (string)($res['phone'] ?? '');
+
+// Build the INSERT only from columns that exist.
+$data = [];
+$add = function ($col, $type, $val) use (&$data, $cols) {
+    if (in_array($col, $cols, true)) $data[$col] = [$type, $val];
+};
+$add('resident_id',    'i', $residentId);
+$add('resident_name',  's', $residentName !== '' ? $residentName : 'Resident');
+$add('resident_phone', 's', $residentPhone);
+$add('concern',        's', $concern);
+$add('waste_type',     's', $wasteType);
+$add('barangay',       's', $barangay);
+$add('status',         's', 'Pending');
+if ($photo !== null) $add($photoCol, 's', $photo);
+if ($video !== null) $add('video_data', 's', $video);
+
+foreach (['resident_id', 'concern', 'waste_type', 'barangay'] as $required) {
+    if (!isset($data[$required])) json_error("Server setup problem: complaint.$required column is missing.", 500);
+}
+
+$names = array_keys($data);
+$types = '';
+$vals  = [];
+foreach ($data as [$t, $v]) { $types .= $t; $vals[] = $v; }
+
+try {
+    $sql = "INSERT INTO complaint (`" . implode('`, `', $names) . "`) VALUES ("
+         . implode(',', array_fill(0, count($names), '?')) . ")";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param($types, ...$vals);
+    $stmt->execute();
+    $newId = (int)$conn->insert_id;
+} catch (Throwable $e) {
+    error_log('reports.php insert failed: ' . $e->getMessage());
+    json_error('Could not save your report. If it has a photo or video, try a smaller file.', 500);
+}
+
+// Activity log (never blocks the report if it fails)
+try {
+    $action = 'New complaint from ' . ($residentName !== '' ? $residentName : 'a resident');
+    $l = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
+    $l->bind_param('s', $action);
+    $l->execute();
+} catch (Throwable $e) {
+    // ignore
+}
+
+json_ok(['message' => 'Report submitted.', 'id' => $newId]);
