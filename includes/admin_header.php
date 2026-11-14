@@ -5,12 +5,6 @@
 requireAdminLogin();
 
 // Total unread driver messages across ALL threads, for the sidebar badge.
-// Reuses the exact same is_read logic messages.php already uses per-thread
-// (SELECT COUNT(*) ... WHERE sender='driver' AND is_read=0), just summed
-// across every driver instead of grouped by one. Falls back to 0 if $conn
-// isn't in scope on whichever page included this header — every admin page
-// that already does require_once '../includes/db.php' before including this
-// file will have it.
 $unreadMessagesCount = 0;
 if (isset($conn)) {
     $unreadResult = $conn->query("SELECT COUNT(*) AS cnt FROM driver_message WHERE sender='driver' AND is_read=0");
@@ -19,8 +13,7 @@ if (isset($conn)) {
     }
 }
 
-// Pending driver registrations awaiting approval, for the sidebar badge on
-// "Driver Approvals". Same pattern as $unreadMessagesCount above.
+// Pending driver registrations awaiting approval, for the sidebar badge.
 $pendingDriverCount = 0;
 if (isset($conn)) {
     $pendingDriverResult = $conn->query("SELECT COUNT(*) AS cnt FROM driver WHERE is_verified=0");
@@ -39,11 +32,11 @@ if (isset($conn)) {
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
   body { font-family: 'Nunito', sans-serif; background: #f0f4f8; color: #1a1a2e; display: flex; flex-direction: column; min-height: 100vh; }
-  
-  /* TOP BAR
-     Fixed 30px tall and sticky, so the sidebar below can always fill the rest
-     of the screen with blue (no white gap when the page is scrolled). */
+  img, video { max-width: 100%; }
+
+  /* TOP BAR */
   .topbar {
     background: #1a1a2e;
     color: white;
@@ -62,10 +55,7 @@ if (isset($conn)) {
   /* MAIN LAYOUT */
   .layout { display: flex; flex: 1; }
 
-  /* SIDEBAR
-     Exactly as tall as the screen under the top bar. The menu in the middle
-     scrolls by itself if it ever runs out of room; the logo stays on top and
-     Logout stays pinned at the bottom. */
+  /* SIDEBAR */
   .sidebar {
     width: 170px;
     background: linear-gradient(180deg, #1a73e8 0%, #0d47a1 100%);
@@ -141,33 +131,42 @@ if (isset($conn)) {
     background: rgba(0,0,0,0.12);
   }
 
-  /* Shorter screens: tighten the sidebar a little so everything fits without scrolling */
+  /* Shorter screens: tighten the sidebar */
   @media (max-height: 820px) {
     .sidebar-logo img { width: 80px !important; }
     .nav-item { padding: 7px 16px; font-size: 13px; }
   }
 
-  /* MAIN CONTENT
-     NOTE: no "overflow: hidden" here. An overflow value other than "visible"
-     turns this element into the scroll container that .page-header sticks to,
-     and since it never scrolls, the header could never stay in place.
-     min-width: 0 is what stops wide content from stretching the layout. */
+  /* MAIN CONTENT (no overflow:hidden here, see sticky header note) */
   .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-  /* HEADER
-     Sticks right under the 30px top bar while the page scrolls. */
+  /* HEADER */
   .page-header {
     background: white;
     border-bottom: 1px solid #e0e7ef;
     padding: 14px 28px;
     display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
     position: sticky;
     top: 30px;
     z-index: 40;
     box-shadow: 0 2px 6px rgba(0,0,0,0.04);
   }
-  .page-header h1 { font-size: 22px; font-weight: 900; color: #1a1a2e; }
-  .admin-info { display: flex; align-items: center; gap: 10px; }
+  .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .page-header h1 {
+    font-size: 22px; font-weight: 900; color: #1a1a2e;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .menu-toggle {
+    display: none;
+    background: none; border: none; cursor: pointer;
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    color: #1a1a2e; flex-shrink: 0;
+  }
+  .menu-toggle:hover { background: #f0f4f8; }
+  .admin-info { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .admin-info .bell { position: relative; }
   .admin-info .bell svg { cursor: pointer; }
   .admin-name { font-weight: 800; font-size: 15px; }
@@ -184,8 +183,25 @@ if (isset($conn)) {
   .admin-avatar:hover { box-shadow: 0 0 0 3px rgba(26,115,232,0.25); transform: translateY(-1px); }
   .admin-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
+  /* SIDEBAR BACKDROP (mobile drawer) */
+  .sidebar-backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 55;
+  }
+
   /* PAGE BODY */
   .page-body { padding: 24px 28px; flex: 1; overflow-y: auto; }
+
+  /* DASHBOARD GRID */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+  .dashboard-grid > * { min-width: 0; }
 
   /* STAT CARDS */
   .stats-grid {
@@ -226,7 +242,8 @@ if (isset($conn)) {
     border-bottom: 1px solid #f0f4f8;
   }
   .card-header h2 { font-size: 17px; font-weight: 800; }
-  .card-body { padding: 0; }
+  /* Tables scroll sideways inside their card instead of breaking the page */
+  .card-body { padding: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
   /* TABLE */
   table { width: 100%; border-collapse: collapse; }
@@ -303,7 +320,7 @@ if (isset($conn)) {
     flex-shrink: 0;
     margin-top: 2px;
   }
-  .activity-text { font-size: 13px; font-weight: 700; line-height: 1.4; }
+  .activity-text { font-size: 13px; font-weight: 700; line-height: 1.4; word-break: break-word; }
   .activity-time { font-size: 11px; color: #aaa; font-weight: 600; margin-top: 2px; }
   .activity-action { margin-left: auto; flex-shrink: 0; }
 
@@ -314,6 +331,7 @@ if (isset($conn)) {
     background: rgba(0,0,0,0.45);
     z-index: 1000;
     align-items: center; justify-content: center;
+    padding: 12px;
   }
   .modal-overlay.open { display: flex; }
   .modal {
@@ -321,10 +339,15 @@ if (isset($conn)) {
     border-radius: 18px;
     width: 100%;
     max-width: 480px;
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     box-shadow: 0 25px 60px rgba(0,0,0,0.3);
     animation: modalIn 0.2s ease;
   }
+  .modal form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
   @keyframes modalIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .modal-header {
     background: linear-gradient(135deg, #1a73e8, #0d47a1);
@@ -332,9 +355,10 @@ if (isset($conn)) {
     color: white;
     font-size: 18px;
     font-weight: 900;
+    flex-shrink: 0;
   }
-  .modal-body { padding: 24px; }
-  .modal-footer { padding: 0 24px 24px; display: flex; gap: 10px; justify-content: flex-end; }
+  .modal-body { padding: 24px; overflow-y: auto; min-height: 0; }
+  .modal-footer { padding: 0 24px 24px; display: flex; gap: 10px; justify-content: flex-end; flex-shrink: 0; }
   .form-group { margin-bottom: 18px; }
   .form-group label { display: block; font-weight: 800; font-size: 13px; margin-bottom: 6px; color: #333; }
   .form-group label .req { color: #e53935; margin-left: 2px; }
@@ -350,20 +374,20 @@ if (isset($conn)) {
   }
   .form-control:focus { border-color: #1a73e8; }
   textarea.form-control { min-height: 100px; resize: vertical; }
-  .radio-group { display: flex; gap: 20px; margin-top: 8px; }
+  .radio-group { display: flex; gap: 20px; margin-top: 8px; flex-wrap: wrap; }
   .radio-label {
     display: flex; align-items: center; gap: 8px;
     font-weight: 700; font-size: 14px; cursor: pointer;
   }
   .radio-label input[type=radio] { accent-color: #1a73e8; width: 18px; height: 18px; }
-  
+
   /* ALERT */
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; font-weight: 700; margin-bottom: 16px; }
   .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
   .alert-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
 
   /* PAGINATION */
-  .pagination { display: flex; gap: 6px; margin-top: 18px; }
+  .pagination { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; }
   .page-link {
     padding: 7px 13px; border-radius: 7px; font-size: 13px; font-weight: 700;
     background: white; border: 1px solid #e0e7ef; color: #333; text-decoration: none;
@@ -371,15 +395,75 @@ if (isset($conn)) {
   }
   .page-link:hover, .page-link.active { background: #1a73e8; color: white; border-color: #1a73e8; }
 
-  /* RESPONSIVE tweaks */
+  /* ================= RESPONSIVE ================= */
+
+  /* Laptop / small desktop */
+  @media (max-width: 1100px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Tablet + phone: sidebar becomes a slide-in drawer */
   @media (max-width: 900px) {
-    .stats-grid { grid-template-columns: repeat(2,1fr); }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .menu-toggle { display: inline-flex; }
+
+    .sidebar {
+      position: fixed;
+      top: 30px; left: 0; bottom: 0;
+      height: auto;
+      width: 250px;
+      max-width: 85vw;
+      z-index: 60;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+    }
+    .sidebar.open { transform: translateX(0); box-shadow: 6px 0 24px rgba(0,0,0,0.25); }
+    .sidebar-backdrop.show { display: block; }
+    body.no-scroll { overflow: hidden; }
+
+    /* undo the short-screen shrinking inside the drawer */
+    .sidebar .nav-item { padding: 12px 18px; font-size: 15px; }
+    .sidebar-logo img { width: 110px !important; }
+
+    .topbar { padding: 0 14px; }
+    .page-header { padding: 10px 16px; }
+    .page-header h1 { font-size: 19px; }
+    .page-body { padding: 16px; }
+  }
+
+  /* Phone */
+  @media (max-width: 600px) {
+    .page-header h1 { font-size: 17px; }
+    .admin-name { display: none; }
+    .page-body { padding: 12px; }
+
+    .stats-grid { grid-template-columns: 1fr; gap: 12px; }
+    .stat-card { padding: 14px 16px; }
+
+    .card-header { padding: 14px 16px 12px; flex-wrap: wrap; gap: 8px; }
+    .card-header h2 { font-size: 16px; }
+
+    /* keep table columns readable; the card scrolls sideways */
+    .card-body table { min-width: 640px; }
+    thead th, tbody td { padding: 10px 12px; }
+
+    .activity-item { padding: 12px 14px; flex-wrap: wrap; }
+
+    .modal-body { padding: 18px; }
+    .modal-footer { padding: 0 18px 18px; flex-wrap: wrap; }
+    .modal-footer .btn { flex: 1; justify-content: center; }
+    .radio-group { gap: 12px; }
+
+    /* 16px stops iPhones from auto-zooming when a field is tapped */
+    .form-control { font-size: 16px; }
   }
 </style>
 </head>
 <body>
 <div class="topbar">For Admin</div>
 <div class="layout">
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
   <!-- SIDEBAR -->
   <aside class="sidebar">
     <div class="sidebar-logo" style="justify-content:center;">
@@ -440,7 +524,12 @@ if (isset($conn)) {
   <!-- MAIN -->
   <div class="main-content">
     <header class="page-header">
-      <h1><?= htmlspecialchars($page_title ?? 'Admin Dashboard') ?></h1>
+      <div class="header-left">
+        <button type="button" class="menu-toggle" id="menuToggle" aria-label="Open menu">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+        </button>
+        <h1><?= htmlspecialchars($page_title ?? 'Admin Dashboard') ?></h1>
+      </div>
       <div class="admin-info">
         <div class="bell">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="#555"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
@@ -448,8 +537,7 @@ if (isset($conn)) {
         <span class="admin-name"><?= htmlspecialchars($_SESSION['admin_name'] ?? 'Admin') ?></span>
         <a href="settings.php" class="admin-avatar" title="Account Settings">
           <?php if (!empty($_SESSION['admin_pic'])): ?>
-            <!-- admin_pic is now a base64 data URI (see settings.php / index.php),
-                 not a filesystem path, so no "../" prefix here. -->
+            <!-- admin_pic is a base64 data URI, so no "../" prefix here. -->
             <img src="<?= htmlspecialchars($_SESSION['admin_pic']) ?>" alt="Profile picture">
           <?php else: ?>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="#888"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
