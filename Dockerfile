@@ -4,6 +4,15 @@ RUN apt-get update && apt-get install -y unzip libzip-dev \
     && docker-php-ext-install mysqli pdo pdo_mysql zip \
     && rm -rf /var/lib/apt/lists/*
 
+# Apache: enable URL rewriting + headers, let .htaccess work, hide server version
+RUN a2enmod rewrite headers \
+    && printf 'ServerTokens Prod\nServerSignature Off\n<Directory /var/www/html>\n    Options -Indexes\n    AllowOverride All\n</Directory>\n' > /etc/apache2/conf-available/bimap.conf \
+    && a2enconf bimap
+
+# PHP: never show errors/paths/version to visitors, safer session cookies
+# (kept in conf.d so the image's other PHP defaults stay exactly as they were)
+RUN printf 'expose_php=Off\ndisplay_errors=Off\ndisplay_startup_errors=Off\nlog_errors=On\nsession.cookie_httponly=1\nsession.cookie_secure=1\nsession.cookie_samesite=Lax\nsession.use_strict_mode=1\n' > "$PHP_INI_DIR/conf.d/zz-bimap.ini"
+
 # Install Composer itself into the image (copied from the official Composer image)
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
