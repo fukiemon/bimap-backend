@@ -1,7 +1,6 @@
 # =====================================================================
 # BiMAP backend hardening  (place in the web root, next to /admin /api /includes)
 # Requires the updated Dockerfile (enables mod_rewrite, mod_headers, AllowOverride).
-# PHP error/version hiding is done in the Dockerfile, NOT here.
 # =====================================================================
 
 Options -Indexes
@@ -17,7 +16,6 @@ Options -Indexes
   RewriteEngine On
 
   # ---- Block direct URL access to internal / sensitive files ----------
-  # (PHP can still include them from the server; only browser URLs are blocked)
   RewriteRule ^(includes|vendor)(/|$) - [F,L]
   RewriteRule ^(Dockerfile|docker-entrypoint\.sh|composer\.json|composer\.lock)$ - [F,L]
   RewriteRule (^|/)\.(git|env|htaccess|htpasswd) - [F,L]
@@ -29,20 +27,17 @@ Options -Indexes
   # ---- Login: /login instead of /index.php?login=1 --------------------
   RewriteCond %{REQUEST_METHOD} =GET
   RewriteCond %{THE_REQUEST} \s/index\.php\?login=1[\s&]
-  RewriteRule ^ /login? [R=301,L]
+  RewriteRule ^ https://%{HTTP_HOST}/login? [R=301,L]
 
   RewriteRule ^login/?$ index.php?login=1 [L]
 
   # ---- Admin pages: /admin/dashboard instead of /admin/dashboard.php --
-  # 1) Old .php address (GET only, so forms/POST keep working) -> clean address.
-  #    AJAX / media endpoints are skipped.
   RewriteCond %{REQUEST_METHOD} =GET
   RewriteCond %{THE_REQUEST} \s/admin/([A-Za-z0-9_]+)\.php[\s?]
   RewriteCond %{REQUEST_URI} !/admin/messages_(poll|send)\.php$
   RewriteCond %{QUERY_STRING} !(^|&)(media|video|detail)=
-  RewriteRule ^ /admin/%1 [R=301,L]
+  RewriteRule ^ https://%{HTTP_HOST}/admin/%1 [R=301,L]
 
-  # 2) Serve /admin/dashboard from dashboard.php behind the scenes
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteCond %{REQUEST_FILENAME}\.php -f
   RewriteRule ^admin/([A-Za-z0-9_]+)$ admin/$1.php [L]
