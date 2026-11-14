@@ -102,7 +102,7 @@ include '../includes/admin_header.php';
 </div>
 
 <!-- COMPLAINTS + ACTIVITIES -->
-<div style="display:grid;grid-template-columns:1fr 380px;gap:20px;margin-bottom:20px;">
+<div class="dashboard-grid">
 
   <!-- Recent Complaints -->
   <div class="card">
@@ -142,8 +142,8 @@ include '../includes/admin_header.php';
             <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($display_name) ?></td>
             <td style="font-size:13.5px;"><?= htmlspecialchars($barangay) ?></td>
             <td style="font-size:13.5px;"><?= htmlspecialchars($waste_type) ?></td>
-            <td style="font-size:13px;color:#555;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
-            <td>
+            <td style="font-size:13px;color:#555;white-space:nowrap;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
+            <td style="white-space:nowrap;">
               <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c), ENT_QUOTES) ?>)">View</button>
               <?php if (($c['status'] ?? '') === 'Pending'): ?>
                 <button class="btn btn-sm btn-success" style="margin-left:4px;"
@@ -168,7 +168,7 @@ include '../includes/admin_header.php';
         <div class="activity-bell">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="#1a73e8"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
         </div>
-        <div style="flex:1">
+        <div style="flex:1;min-width:0;">
           <div class="activity-text"><?= htmlspecialchars($a['action'] ?? 'System activity') ?></div>
           <div class="activity-time"><?= timeAgo($a['created_at'] ?? date('Y-m-d H:i:s')) ?></div>
         </div>
@@ -191,7 +191,7 @@ include '../includes/admin_header.php';
       <div class="activity-bell" style="background:#fff3e0;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="#f57c00"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
       </div>
-      <div style="flex:1">
+      <div style="flex:1;min-width:0;">
         <div class="activity-text"><?= htmlspecialchars($ann['title'] ?? 'Untitled') ?></div>
         <div class="activity-time"><?= htmlspecialchars(substr($ann['message'] ?? '', 0, 65)) ?>...</div>
         <div style="margin-top:3px;">
@@ -212,7 +212,7 @@ include '../includes/admin_header.php';
 <div class="modal-overlay" id="viewModal">
   <div class="modal" style="max-width:620px;">
     <div class="modal-header" id="viewModalTitle">Complaint Details</div>
-    <div class="modal-body" id="viewModalBody" style="max-height:75vh;overflow-y:auto;"></div>
+    <div class="modal-body" id="viewModalBody"></div>
     <div class="modal-footer">
       <button type="button" class="btn" onclick="closeViewModal()">Close</button>
     </div>
@@ -297,14 +297,13 @@ function viewComplaint(c) {
     .replace(/\[Video:[^\]]*\]\s*/i, '')
     .trim();
 
-  // Resident profile details (from the joined resident table)
   const fullName = [c.r_first_name, c.r_last_name].filter(Boolean).join(' ')
                    || c.resident_name || '—';
 
   const residentHTML = `
     <div style="background:#f4f8ff;padding:16px;border-radius:10px;border:1px solid #dbe7ff;">
       <strong>Resident Details</strong>
-      <div style="margin-top:8px;display:grid;gap:4px;font-size:14px;">
+      <div style="margin-top:8px;display:grid;gap:4px;font-size:14px;word-break:break-word;">
         <div><strong>Name:</strong> ${esc(fullName)}</div>
         <div><strong>Phone:</strong> ${esc(c.r_phone || c.resident_phone || '—')}</div>
         <div><strong>Email:</strong> ${esc(c.r_email || '—')}</div>
@@ -313,20 +312,18 @@ function viewComplaint(c) {
       </div>
     </div>`;
 
-  // Photo HTML
   let photoHTML = '';
   if (c.photo && c.photo.trim() !== '') {
     photoHTML = `
       <div style="margin:15px 0;">
         <strong>📷 Attached Photo:</strong><br>
         <img src="../${esc(c.photo)}"
-             style="max-width:100%;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
+             style="max-width:100%;height:auto;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
              onclick="window.open('../${esc(c.photo)}', '_blank')"
              alt="Complaint Photo">
       </div>`;
   }
 
-  // Video HTML
   let videoHTML = '';
   if (videoPath) {
     videoHTML = `
@@ -361,12 +358,12 @@ function viewComplaint(c) {
       ${videoHTML}
       <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
         <strong>Description:</strong><br>
-        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;">${esc(description) || '—'}</span>
+        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;">${esc(description) || '—'}</span>
       </div>
       ${c.admin_notes ? `
       <div style="background:#f0fff4;padding:16px;border-radius:10px;border:1px solid #c3e6cb;">
         <strong>Admin Notes:</strong><br>
-        <span style="white-space:pre-wrap;">${esc(c.admin_notes)}</span>
+        <span style="white-space:pre-wrap;word-break:break-word;">${esc(c.admin_notes)}</span>
       </div>` : ''}
     </div>
   `;
@@ -375,7 +372,6 @@ function viewComplaint(c) {
 }
 
 function closeViewModal() {
-  // Pause video when closing to stop audio playing in background
   const video = document.querySelector('#viewModalBody video');
   if (video) { video.pause(); video.currentTime = 0; }
   document.getElementById('viewModal').classList.remove('open');
@@ -394,7 +390,6 @@ function closeResolveModal() {
 document.querySelectorAll('.modal-overlay').forEach(modal => {
   modal.addEventListener('click', function(e) {
     if (e.target === this) {
-      // Pause video if closing view modal by clicking overlay
       const video = this.querySelector('video');
       if (video) { video.pause(); video.currentTime = 0; }
       this.classList.remove('open');
