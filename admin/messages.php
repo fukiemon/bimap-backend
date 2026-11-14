@@ -85,12 +85,12 @@ include '../includes/admin_header.php';
 ?>
 <style>
 /* ---- Fit this page to the screen: no page scrolling, only the message list scrolls ---- */
-body{height:100vh;min-height:0;overflow:hidden}
+body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
 .layout{min-height:0}
 .main-content{min-height:0}
 .page-body{display:flex;flex-direction:column;overflow:hidden;padding:16px 28px}
 
-.msg-layout{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr);gap:0;background:white;border-radius:12px;border:1.5px solid #e0e8f4;overflow:hidden;flex:1;min-height:0;box-shadow:0 4px 20px rgba(0,0,0,0.08)}
+.msg-layout{display:grid;grid-template-columns:300px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0;background:white;border-radius:12px;border:1.5px solid #e0e8f4;overflow:hidden;flex:1;min-height:0;box-shadow:0 4px 20px rgba(0,0,0,0.08)}
 .thread-list{border-right:1px solid #e0e8f4;overflow-y:auto;display:flex;flex-direction:column;min-height:0}
 .tl-header{padding:14px 16px;background:#f8fafc;border-bottom:1px solid #e0e8f4;font-size:14px;font-weight:900;color:#0d1b2a;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .new-chat-btn{background:#1a73e8;color:white;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;transition:background 0.15s;white-space:nowrap}
@@ -107,6 +107,8 @@ body{height:100vh;min-height:0;overflow:hidden}
 
 .chat-area{display:flex;flex-direction:column;overflow:hidden;min-height:0;min-width:0}
 .chat-header{padding:14px 18px;border-bottom:1px solid #e0e8f4;display:flex;align-items:center;gap:12px;background:#f8fafc;flex-shrink:0}
+.chat-back{display:none;width:36px;height:36px;border-radius:50%;align-items:center;justify-content:center;color:#1a1a2e;text-decoration:none;flex-shrink:0;margin-left:-6px}
+.chat-back:hover{background:#e8f0fe}
 .ch-avatar{width:38px;height:38px;background:#e8f0fe;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
 .ch-name{font-size:15px;font-weight:800;color:#0d1b2a}
 .ch-status{font-size:11px;color:#00897b;font-weight:700}
@@ -122,7 +124,7 @@ body{height:100vh;min-height:0;overflow:hidden}
 .tick{margin-left:4px;font-weight:800;color:#9baabb}
 .tick.seen{color:#1a73e8}
 .chat-input-bar{padding:12px 16px;border-top:1px solid #e0e8f4;background:white;display:flex;gap:10px;align-items:flex-end;flex-shrink:0}
-.chat-textarea{flex:1;border:1.5px solid #e0e8f4;border-radius:20px;padding:10px 14px;font-size:14px;font-family:inherit;font-weight:600;color:#0d1b2a;outline:none;resize:none;max-height:80px;line-height:1.4}
+.chat-textarea{flex:1;min-width:0;border:1.5px solid #e0e8f4;border-radius:20px;padding:10px 14px;font-size:14px;font-family:inherit;font-weight:600;color:#0d1b2a;outline:none;resize:none;max-height:80px;line-height:1.4}
 .chat-textarea:focus{border-color:#1a73e8}
 .send-btn{width:40px;height:40px;border-radius:50%;background:#1a73e8;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s;flex-shrink:0}
 .send-btn:hover{background:#0d47a1}
@@ -143,16 +145,27 @@ body{height:100vh;min-height:0;overflow:hidden}
 .dl-tag{font-size:10px;font-weight:800;color:#1a73e8;background:#e8f0fe;border-radius:10px;padding:3px 8px;flex-shrink:0}
 .dl-empty{padding:22px;text-align:center;color:#9baabb;font-size:13px;font-weight:700}
 
-/* Phones / narrow windows: go back to a normal scrolling page */
+/* Narrow windows and phones: one pane at a time.
+   No chat selected  -> show the conversation list.
+   Chat selected     -> show the chat, with a back arrow to the list. */
 @media(max-width:768px){
-  body{height:auto;min-height:100vh;overflow:auto}
-  .page-body{overflow:visible}
-  .msg-layout{grid-template-columns:1fr;grid-template-rows:auto;height:75vh;flex:none}
-  .thread-list{border-right:none;border-bottom:1px solid #e0e8f4;max-height:250px}
+  .page-body{padding:8px}
+  .msg-layout{grid-template-columns:1fr;border-radius:10px}
+  .thread-list{border-right:none}
+  .msg-layout.has-chat .thread-list{display:none}
+  .msg-layout:not(.has-chat) .chat-area{display:none}
+  .chat-back{display:flex}
+  .chat-header{padding:10px 12px}
+  .chat-messages{padding:12px}
+  .bubble-wrap{max-width:85%}
+  .chat-input-bar{padding:10px 12px}
+  /* 16px stops iPhones from zooming in when the box is tapped */
+  .chat-textarea{font-size:16px}
+  .thread-item{padding:14px}
 }
 </style>
 
-<div class="msg-layout">
+<div class="msg-layout <?= $canChat ? 'has-chat' : '' ?>">
   <!-- THREAD LIST -->
   <div class="thread-list">
     <div class="tl-header">
@@ -190,6 +203,9 @@ body{height:100vh;min-height:0;overflow:hidden}
   <div class="chat-area">
     <?php if ($canChat): ?>
     <div class="chat-header">
+      <a href="messages.php" class="chat-back" aria-label="Back to conversations">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </a>
       <div class="ch-avatar">🚛</div>
       <div><div class="ch-name"><?= htmlspecialchars($selected_name !== '' ? $selected_name : 'Driver') ?></div><div class="ch-status">Driver</div></div>
     </div>
@@ -214,7 +230,7 @@ body{height:100vh;min-height:0;overflow:hidden}
         <input type="hidden" name="driver_id" id="driverIdInput" value="<?= $selected_driver ?>">
         <input type="hidden" name="driver_name" value="<?= htmlspecialchars($selected_name) ?>">
         <textarea class="chat-textarea" name="reply_msg" id="replyInput" placeholder="Type a message..." rows="1" maxlength="500"></textarea>
-        <button type="submit" class="send-btn" id="sendBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+        <button type="submit" class="send-btn" id="sendBtn" aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
       </form>
     </div>
     <?php else: ?>
