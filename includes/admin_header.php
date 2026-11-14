@@ -457,6 +457,69 @@ if (isset($conn)) {
     /* 16px stops iPhones from auto-zooming when a field is tapped */
     .form-control { font-size: 16px; }
   }
+
+  /* ================= PER-PAGE RESPONSIVE FIXES =================
+     These target the inline layouts / page styles used by the other admin
+     pages, so those files don't need to be edited. */
+
+  /* Settings (inline 2-column grids) -> 1 column on tablet/phone */
+  @media (max-width: 700px) {
+    .page-body div[style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
+  }
+
+  /* Filter forms (complaints, announcements) wrap on phones */
+  @media (max-width: 600px) {
+    .card-body form[method="GET"],
+    .page-body > div > form[method="GET"] { flex-wrap: wrap; width: 100%; }
+    .card-body form[method="GET"] > .form-control,
+    .page-body > div > form[method="GET"] > .form-control { flex: 1 1 100%; max-width: 100% !important; }
+    .card-body form[method="GET"] > .btn,
+    .page-body > div > form[method="GET"] > .btn { flex: 1 1 auto; justify-content: center; }
+    .card-body form[method="GET"] > span { margin-left: 0 !important; width: 100%; }
+  }
+
+  /* Announcements: header row + card rows stack on phones */
+  @media (max-width: 600px) {
+    .page-body div[style*="justify-content:space-between;align-items:center;margin-bottom:20px"] { flex-wrap: wrap; gap: 12px; }
+    .page-body div[style*="justify-content:space-between;align-items:flex-start;gap:16px"] { flex-wrap: wrap; }
+    .page-body [style*="margin-left:48px"] { margin-left: 0 !important; }
+    .page-body p[style*="margin:10px 0 12px 48px"] { margin-left: 0 !important; word-break: break-word; }
+  }
+
+  /* Driver approvals */
+  .dc-actions { flex-wrap: wrap; }
+  @media (max-width: 480px) {
+    .dm-rows { grid-template-columns: 1fr !important; gap: 2px 0 !important; }
+    .dm-rows .k { margin-top: 8px; font-size: 12px; }
+  }
+
+  /* Feedback */
+  .fb-tabs { flex-wrap: wrap; }
+  .fb-pager { flex-wrap: wrap; gap: 10px; }
+  @media (max-width: 600px) {
+    .fb-filters .form-group { flex: 1 1 100%; }
+    .fb-filters .form-group .form-control { width: 100%; }
+    .fb-pad { padding: 14px 16px 18px; }
+  }
+
+  /* Reports */
+  @media (max-width: 900px) {
+    .analytics-grid { grid-template-columns: 1fr !important; }
+  }
+  @media (max-width: 600px) {
+    .filter-bar { padding: 14px; }
+    .filter-bar form { width: 100%; }
+    .filter-period-label { margin-left: 0 !important; width: 100%; }
+    .print-btn { width: 100%; justify-content: center; }
+    .rpt-card-header { padding: 18px 16px 0 16px; }
+    .rpt-card-body { padding: 16px; }
+    .bar-label { width: 96px !important; font-size: 11px; }
+    .donut-wrap { flex-wrap: wrap; gap: 16px; justify-content: center; }
+    .stat-card { padding: 16px; }
+  }
+  @media print {
+    .sidebar-backdrop, .menu-toggle { display: none !important; }
+  }
 </style>
 </head>
 <body>
