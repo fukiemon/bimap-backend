@@ -1,6 +1,20 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+requireAdminLogin();
+
+// Opening / closing a conversation keeps the driver ID out of the address bar:
+// the choice is stored in the session, then we redirect to the clean URL.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['open_driver'])) {
+    $_SESSION['msg_driver'] = (int)$_POST['open_driver'];
+    header('Location: messages.php');
+    exit;
+}
+if (isset($_GET['driver'])) { // old links like messages.php?driver=5 still work
+    $_SESSION['msg_driver'] = (int)$_GET['driver'];
+    header('Location: messages.php');
+    exit;
+}
 
 // Philippine time for everything on this page (PHP and MySQL session).
 date_default_timezone_set('Asia/Manila');
@@ -41,7 +55,7 @@ $threads=$conn->query("SELECT dm.driver_id,
 
 $threadDriverIds = array_map(fn($t) => (int)$t['driver_id'], $threads);
 
-$selected_driver=intval($_GET['driver']??0);
+$selected_driver=intval($_SESSION['msg_driver']??0);
 $selectedDriverRow = $driverById[$selected_driver] ?? null; // null if not a verified driver
 $conversation=[];
 $selected_name='';
@@ -174,7 +188,7 @@ body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
     </div>
 
     <?php if ($pendingThread): ?>
-    <a href="messages.php?driver=<?= (int)$pendingThread['driver_id'] ?>" class="thread-item active">
+    <a href="messages.php" data-driver="<?= (int)$pendingThread['driver_id'] ?>" class="thread-item active">
       <div class="ti-avatar">🚛</div>
       <div class="ti-body">
         <div class="ti-name"><?= htmlspecialchars($pendingThread['driver_name']) ?></div>
@@ -187,7 +201,7 @@ body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
     <div style="padding:24px;text-align:center;color:#9baabb;font-size:13px;font-weight:700">No messages yet.<br>Click “+ New Chat” to message a driver.</div>
     <?php else: ?>
     <?php foreach ($threads as $t): $isActive=$t['driver_id']==$selected_driver; ?>
-    <a href="messages.php?driver=<?= (int)$t['driver_id'] ?>" class="thread-item <?= $isActive?'active':'' ?>">
+    <a href="messages.php" data-driver="<?= (int)$t['driver_id'] ?>" class="thread-item <?= $isActive?'active':'' ?>">
       <div class="ti-avatar">🚛</div>
       <div class="ti-body">
         <div class="ti-name"><?= htmlspecialchars($t['driver_name'] ?? 'Driver') ?></div>
@@ -203,7 +217,7 @@ body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
   <div class="chat-area">
     <?php if ($canChat): ?>
     <div class="chat-header">
-      <a href="messages.php" class="chat-back" aria-label="Back to conversations">
+      <a href="messages.php" data-driver="0" class="chat-back" aria-label="Back to conversations">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
       </a>
       <div class="ch-avatar">🚛</div>
@@ -256,7 +270,7 @@ body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
             $searchText = mb_strtolower($nm . ' ' . implode(' ', $sub));
             $hasThread = in_array((int)$d['id'], $threadDriverIds, true);
           ?>
-          <a class="dl-item" href="messages.php?driver=<?= (int)$d['id'] ?>" data-search="<?= htmlspecialchars($searchText) ?>">
+          <a class="dl-item" href="messages.php" data-driver="<?= (int)$d['id'] ?>" data-search="<?= htmlspecialchars($searchText) ?>">
             <div class="dl-avatar">🚛</div>
             <div class="dl-body">
               <div class="dl-name"><?= htmlspecialchars($nm) ?></div>
@@ -276,6 +290,21 @@ body{height:100vh;height:100dvh;min-height:0;overflow:hidden}
 </div>
 
 <script>
+// Open a conversation (or go back to the list with id 0) without the ID in the URL
+document.addEventListener('click', function (e) {
+    const a = e.target.closest('[data-driver]');
+    if (!a) return;
+    e.preventDefault();
+    const f = document.createElement('form');
+    f.method = 'POST';
+    f.action = 'messages.php';
+    const i = document.createElement('input');
+    i.type = 'hidden'; i.name = 'open_driver'; i.value = a.dataset.driver;
+    f.appendChild(i);
+    document.body.appendChild(f);
+    f.submit();
+});
+
 const cm = document.getElementById('cm');
 const driverId = <?= (int)$selected_driver ?>;
 
