@@ -21,6 +21,10 @@ if (isset($_POST['create_announcement'])) {
         if ($stmt->execute()) {
             $conn->query("INSERT INTO activity_log (action) VALUES ('Announcement published: " . $conn->real_escape_string($title) . "')");
             $success = 'Announcement published successfully!';
+
+            // Push notification to the phones of the chosen audience
+            require_once '../includes/push.php';
+            pushAnnouncement($conn, $target, $title, $message);
         } else {
             $error = 'Failed to publish announcement.';
         }
