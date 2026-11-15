@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+require_once '../includes/push.php';
 header('Content-Type: application/json');
 
 // Same check every admin page runs via admin_header.php. This endpoint is
@@ -48,6 +49,15 @@ if (!$ins->execute()) {
 }
 
 $new_id = $conn->insert_id;
+
+// Push notification to the driver's phone (never blocks or breaks the reply if it fails)
+sendPush(
+    $conn,
+    getDeviceTokens($conn, 'driver', $driver_id),
+    'New message from Admin',
+    mb_strimwidth($msg, 0, 120, '…'),
+    ['type' => 'message']
+);
 
 $stmt = $conn->prepare("SELECT id, message, created_at FROM driver_message WHERE id = ?");
 $stmt->bind_param("i", $new_id);
