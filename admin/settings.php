@@ -10,6 +10,18 @@ $success = '';
 $error = '';
 $adminId = (int)$_SESSION['admin_id'];
 
+// Label from minutes since last activity (NULL = never seen)
+if (!function_exists('lastSeenLabel')) {
+    function lastSeenLabel($mins) {
+        if ($mins === null) return 'Never';
+        $mins = (int)$mins;
+        if ($mins <= 5)   return 'Online';
+        if ($mins < 60)   return $mins . ' min ago';
+        if ($mins < 1440) return floor($mins / 60) . 'h ago';
+        return floor($mins / 1440) . 'd ago';
+    }
+}
+
 // Change password
 if (isset($_POST['change_password'])) {
     $current = $_POST['current_password'] ?? '';
@@ -116,7 +128,7 @@ if (isset($_POST['create_admin'])) {
         } else {
             $hashed_pw = password_hash($new_pw, PASSWORD_DEFAULT);
             $ins = $conn->prepare(
-                "INSERT INTO admin (name, username, password, created_at) VALUES (?, ?, ?, NOW())"
+                "INSERT INTO admin (name, username, password, status, created_at) VALUES (?, ?, ?, 'active', NOW())"
             );
             $ins->bind_param('sss', $new_name, $new_username, $hashed_pw);
 
@@ -128,6 +140,55 @@ if (isset($_POST['create_admin'])) {
         }
     }
 }
+
+// Admin management actions: disable / enable / reset password / delete
+if (isset($_POST['admin_action'])) {
+    $action   = $_POST['admin_action'];
+    $targetId = (int)($_POST['target_id'] ?? 0);
+
+    if ($targetId === $adminId) {
+        $error = 'You cannot do this to your own account.';
+    } else {
+        try {
+            if ($action === 'disable' || $action === 'enable') {
+                $newStatus = ($action === 'disable') ? 'disabled' : 'active';
+                $st = $conn->prepare("UPDATE admin SET status = ? WHERE id = ?");
+                $st->bind_param('si', $newStatus, $targetId);
+                $st->execute();
+                $success = 'Admin account ' . ($action === 'disable' ? 'disabled' : 'enabled') . '.';
+
+            } elseif ($action === 'reset_password') {
+                $pw = $_POST['reset_password'] ?? '';
+                if (strlen($pw) < 8) {
+                    $error = 'New password must be at least 8 characters.';
+                } else {
+                    $hash = password_hash($pw, PASSWORD_DEFAULT);
+                    $st = $conn->prepare("UPDATE admin SET password = ? WHERE id = ?");
+                    $st->bind_param('si', $hash, $targetId);
+                    $st->execute();
+                    $success = 'Password reset successfully.';
+                }
+
+            } elseif ($action === 'delete') {
+                $st = $conn->prepare("DELETE FROM admin WHERE id = ?");
+                $st->bind_param('i', $targetId);
+                $st->execute();
+                $success = 'Admin account deleted.';
+            }
+        } catch (Throwable $e) {
+            $error = 'Action failed. If this admin has linked records, disable the account instead of deleting it.';
+        }
+    }
+}
+
+// Admin list (runs after the handlers so it shows the latest data).
+// mins_ago is computed in SQL so PHP/MySQL timezone differences don't matter.
+$admins = $conn->query("
+    SELECT id, name, username, status, created_at,
+           TIMESTAMPDIFF(MINUTE, last_active, NOW()) AS mins_ago
+    FROM admin
+    ORDER BY (status = 'active') DESC, last_active DESC, created_at ASC
+")->fetch_all(MYSQLI_ASSOC);
 
 include '../includes/admin_header.php';
 ?>
@@ -241,6 +302,87 @@ include '../includes/admin_header.php';
         <button type="submit" name="create_admin" class="btn btn-primary">Create Admin Account</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Manage Admins -->
+<div class="card" style="margin-top:20px;max-width:900px;">
+  <div class="card-header"><h2>Manage Admins</h2></div>
+  <div class="card-body" style="padding:20px;overflow-x:auto;">
+    <table class="data-table" style="width:100%;">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Username</th>
+          <th>Status</th>
+          <th>Activity</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      <?php foreach ($admins as $a):
+        $isSelf   = (int)$a['id'] === $adminId;
+        $isActive = $a['status'] === 'active';
+        $online   = $isActive && $a['mins_ago'] !== null && (int)$a['mins_ago'] <= 5;
+      ?>
+        <tr style="<?= $isActive ? '' : 'opacity:.6;' ?>">
+          <td style="font-weight:700;font-size:14px;">
+            <?= htmlspecialchars($a['name']) ?><?= $isSelf ? ' <span style="color:#888;font-weight:600;">(You)</span>' : '' ?>
+          </td>
+          <td style="font-size:13.5px;"><?= htmlspecialchars($a['username'] ?? '') ?></td>
+          <td>
+            <?php if ($isActive): ?>
+              <span style="background:#e8f5e9;color:#2e7d32;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;">Active</span>
+            <?php else: ?>
+              <span style="background:#fdecea;color:#c62828;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;">Disabled</span>
+            <?php endif; ?>
+          </td>
+          <td style="font-size:13px;white-space:nowrap;">
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:<?= $online ? '#2e7d32' : '#bbb' ?>;"></span>
+            <?= htmlspecialchars(lastSeenLabel($a['mins_ago'])) ?>
+          </td>
+          <td style="font-size:13px;color:#555;white-space:nowrap;"><?= date('M d, Y', strtotime($a['created_at'] ?? 'now')) ?></td>
+          <td>
+            <?php if ($isSelf): ?>
+              <span style="color:#888;font-size:12px;">This is you</span>
+            <?php else: ?>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+
+                <!-- Reset password (own form so pressing Enter can't trigger Disable) -->
+                <form method="POST" style="display:flex;gap:6px;">
+                  <input type="hidden" name="target_id" value="<?= (int)$a['id'] ?>">
+                  <input type="password" name="reset_password" class="form-control"
+                         placeholder="New password" autocomplete="new-password" style="width:140px;">
+                  <button type="submit" name="admin_action" value="reset_password" class="btn btn-sm btn-primary">Reset</button>
+                </form>
+
+                <!-- Disable / Enable -->
+                <form method="POST">
+                  <input type="hidden" name="target_id" value="<?= (int)$a['id'] ?>">
+                  <?php if ($isActive): ?>
+                    <button type="submit" name="admin_action" value="disable" class="btn btn-sm"
+                            onclick="return confirm('Disable this admin? They will no longer be able to log in.');">Disable</button>
+                  <?php else: ?>
+                    <button type="submit" name="admin_action" value="enable" class="btn btn-sm btn-success">Enable</button>
+                  <?php endif; ?>
+                </form>
+
+                <!-- Delete -->
+                <form method="POST">
+                  <input type="hidden" name="target_id" value="<?= (int)$a['id'] ?>">
+                  <button type="submit" name="admin_action" value="delete" class="btn btn-sm"
+                          style="background:#c62828;color:#fff;"
+                          onclick="return confirm('Permanently delete this admin account?');">Delete</button>
+                </form>
+
+              </div>
+            <?php endif; ?>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table>
   </div>
 </div>
 
