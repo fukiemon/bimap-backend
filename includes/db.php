@@ -93,11 +93,36 @@ function timeAgo($datetime) {
 }
 
 // Session check helper
+// - redirects to login if not logged in
+// - logs out admins that were disabled or deleted (even mid-session)
+// - records last activity (powers Online / last seen in the admin pages)
+// NOTE: run admin_migration.sql first, otherwise the status/last_active
+//       columns don't exist yet and admin pages will show the error page.
 function requireAdminLogin() {
+    global $conn;
+
     if (session_status() === PHP_SESSION_NONE) session_start();
     if (!isset($_SESSION['admin_id'])) {
         header('Location: ../index.php?login=1');
         exit;
     }
+
+    $id = (int)$_SESSION['admin_id'];
+
+    $chk = $conn->prepare("SELECT status FROM admin WHERE id = ?");
+    $chk->bind_param('i', $id);
+    $chk->execute();
+    $row = $chk->get_result()->fetch_assoc();
+
+    if (!$row || $row['status'] !== 'active') {
+        $_SESSION = [];
+        session_destroy();
+        header('Location: ../index.php?login=1');
+        exit;
+    }
+
+    $upd = $conn->prepare("UPDATE admin SET last_active = NOW() WHERE id = ?");
+    $upd->bind_param('i', $id);
+    $upd->execute();
 }
 ?>
