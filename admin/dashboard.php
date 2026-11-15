@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+requireAdminLogin(); // protects the page AND the resolve handler below
 
 $page_title = 'Admin Dashboard';
 $active_nav = 'dashboard';
@@ -52,6 +53,27 @@ $complaints = $conn->query("
 
 $activities    = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
 $announcements = $conn->query("SELECT * FROM announcement ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
+
+// Label from minutes since last activity (NULL = never seen)
+if (!function_exists('lastSeenLabel')) {
+    function lastSeenLabel($mins) {
+        if ($mins === null) return 'Never';
+        $mins = (int)$mins;
+        if ($mins <= 5)   return 'Online';
+        if ($mins < 60)   return $mins . ' min ago';
+        if ($mins < 1440) return floor($mins / 60) . 'h ago';
+        return floor($mins / 1440) . 'd ago';
+    }
+}
+
+// Active admin accounts (minutes computed in SQL so timezones don't matter)
+$active_admins = $conn->query("
+    SELECT id, name, username,
+           TIMESTAMPDIFF(MINUTE, last_active, NOW()) AS mins_ago
+    FROM admin
+    WHERE status = 'active'
+    ORDER BY last_active DESC
+")->fetch_all(MYSQLI_ASSOC);
 
 include '../includes/admin_header.php';
 ?>
@@ -176,6 +198,33 @@ include '../includes/admin_header.php';
       </div>
       <?php endforeach; ?>
     </div>
+  </div>
+</div>
+
+<!-- ADMINS -->
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <h2>Admins</h2>
+    <a href="settings.php" class="btn btn-primary btn-sm">Manage Admins</a>
+  </div>
+  <div class="card-body">
+    <?php foreach ($active_admins as $ad):
+      $online = $ad['mins_ago'] !== null && (int)$ad['mins_ago'] <= 5;
+    ?>
+    <div class="activity-item">
+      <div class="activity-bell" style="background:#e8f5e9;font-weight:700;color:#2e7d32;">
+        <?= htmlspecialchars(strtoupper(substr($ad['name'], 0, 1))) ?>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="activity-text"><?= htmlspecialchars($ad['name']) ?></div>
+        <div class="activity-time">@<?= htmlspecialchars($ad['username'] ?? '') ?></div>
+      </div>
+      <div style="font-size:12px;font-weight:700;white-space:nowrap;color:<?= $online ? '#2e7d32' : '#888' ?>;">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:<?= $online ? '#2e7d32' : '#bbb' ?>;"></span>
+        <?= htmlspecialchars(lastSeenLabel($ad['mins_ago'])) ?>
+      </div>
+    </div>
+    <?php endforeach; ?>
   </div>
 </div>
 
