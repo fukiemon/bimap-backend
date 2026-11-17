@@ -77,6 +77,8 @@ try {
 }
 
 $conn->set_charset("utf8mb4");
+date_default_timezone_set('Asia/Manila');
+$conn->query("SET time_zone = '+08:00'");
 
 // Helper: time ago
 function timeAgo($datetime) {
