@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+require_once '../includes/push.php';
 requireAdminLogin(); // protects the page AND the resolve handler below
 
 $page_title = 'Admin Dashboard';
@@ -14,7 +15,7 @@ if (isset($_POST['resolve_id'])) {
     $stmt->bind_param("si", $notes, $id);
     $stmt->execute();
 
-    $stmt2 = $conn->prepare("SELECT resident_name FROM complaint WHERE id=?");
+    $stmt2 = $conn->prepare("SELECT resident_name, resident_id FROM complaint WHERE id=?");
     $stmt2->bind_param("i", $id);
     $stmt2->execute();
     $complaint = $stmt2->get_result()->fetch_assoc();
@@ -24,6 +25,17 @@ if (isset($_POST['resolve_id'])) {
         $stmt3 = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
         $stmt3->bind_param("s", $action);
         $stmt3->execute();
+
+        // Push notification to the resident who filed the complaint
+        if (!empty($complaint['resident_id'])) {
+            send_push(
+                $conn,
+                tokens_for($conn, 'resident', (int)$complaint['resident_id']),
+                'Complaint resolved',
+                $notes !== '' ? $notes : 'Your complaint has been resolved.',
+                ['type' => 'complaint_resolved', 'complaint_id' => $id]
+            );
+        }
     }
 
     $_SESSION['success'] = 'Complaint marked as resolved.';
