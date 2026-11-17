@@ -1,428 +1,453 @@
 <?php
 session_start();
 require_once '../includes/db.php';
-requireAdminLogin(); // must run BEFORE any POST/GET handling below
+requireAdminLogin(); // protects the page AND the resolve handler below
 
-$page_title = 'Driver Approvals';
-$active_nav = 'driver_approvals';
+$page_title = 'Admin Dashboard';
+$active_nav = 'dashboard';
 
-// Host where your API / driver app saves uploaded files, e.g. 'https://your-api-host.com'
-// (no trailing slash). Leave empty only if the uploads folder sits in the same
-// project as this admin folder.
-$DRIVER_UPLOAD_BASE = '';
+if (isset($_POST['resolve_id'])) {
+    $id = (int)$_POST['resolve_id'];
+    $notes = trim($_POST['admin_notes'] ?? '');
 
-// Turns a stored photo value into something usable in <img src>.
-// Handles base64 data URIs, full URLs, and relative file paths.
-function photo_src($v) {
-    global $DRIVER_UPLOAD_BASE;
-    $v = trim((string)$v);
-    if ($v === '') return null;
-    if (strncmp($v, 'data:', 5) === 0 || preg_match('#^https?://#i', $v)) return $v;
-
-    $clean = ltrim(str_replace('\\', '/', $v), '/');
-    if (!empty($DRIVER_UPLOAD_BASE)) {
-        return rtrim($DRIVER_UPLOAD_BASE, '/') . '/' . $clean;
-    }
-    return '../' . $clean;
-}
-
-function log_activity($conn, $text) {
-    $s = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
-    $s->bind_param('s', $text);
-    $s->execute();
-}
-
-// ---- JSON endpoint: driver details (used by the "view details" modal) ----
-if (isset($_GET['detail'])) {
-    $id = (int)$_GET['detail'];
-    $stmt = $conn->prepare(
-        "SELECT id, first_name, last_name, email, phone, barangay, municipality, province,
-                household_address, location, driver_license, license_number, license_photo,
-                profile_pic, created_at, is_verified, is_suspended, suspended_at, suspended_reason
-         FROM driver WHERE id = ? LIMIT 1"
-    );
-    $stmt->bind_param('i', $id);
+    $stmt = $conn->prepare("UPDATE complaint SET status='Resolved', admin_notes=? WHERE id=?");
+    $stmt->bind_param("si", $notes, $id);
     $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
 
-    header('Content-Type: application/json; charset=utf-8');
-    if (!$row) {
-        http_response_code(404);
-        echo json_encode(['error' => 'Driver not found']);
-        exit;
+    $stmt2 = $conn->prepare("SELECT resident_name FROM complaint WHERE id=?");
+    $stmt2->bind_param("i", $id);
+    $stmt2->execute();
+    $complaint = $stmt2->get_result()->fetch_assoc();
+
+    if ($complaint) {
+        $action = $complaint['resident_name'] . " Complaint was resolved";
+        $stmt3 = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
+        $stmt3->bind_param("s", $action);
+        $stmt3->execute();
     }
-    $row['license_no']  = $row['driver_license'] ?: $row['license_number'];
-    $row['license_src'] = photo_src($row['license_photo']);
-    $row['pic_src']     = photo_src($row['profile_pic']);
-    unset($row['license_photo'], $row['profile_pic']);
-    echo json_encode($row, JSON_UNESCAPED_SLASHES);
+
+    $_SESSION['success'] = 'Complaint marked as resolved.';
+    header("Location: dashboard.php");
     exit;
 }
 
-// ---- Handle approve / reject / suspend / reactivate ----
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id     = (int)($_POST['driver_id'] ?? 0);
-    $action = $_POST['action'] ?? '';
-    $flash  = null;
+$total_complaints    = $conn->query("SELECT COUNT(*) as c FROM complaint")->fetch_assoc()['c'] ?? 0;
+$pending_complaints  = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Pending'")->fetch_assoc()['c'] ?? 0;
+$resolved_complaints = $conn->query("SELECT COUNT(*) as c FROM complaint WHERE status='Resolved'")->fetch_assoc()['c'] ?? 0;
+$total_announcements = $conn->query("SELECT COUNT(*) as c FROM announcement")->fetch_assoc()['c'] ?? 0;
 
-    if ($id && $action === 'approve') {
-        $s = $conn->prepare("UPDATE driver SET is_verified = 1 WHERE id = ?");
-        $s->bind_param('i', $id); $s->execute();
-        log_activity($conn, "Driver ID $id was approved by admin");
-        $flash = 'Driver approved.';
+// Complaints joined with the resident's saved profile (password is NOT selected).
+$complaints = $conn->query("
+    SELECT c.*,
+           r.first_name         AS r_first_name,
+           r.last_name          AS r_last_name,
+           r.email              AS r_email,
+           r.phone              AS r_phone,
+           r.barangay           AS r_barangay,
+           r.household_address  AS r_household_address
+    FROM complaint c
+    LEFT JOIN resident r ON r.id = c.resident_id
+    ORDER BY c.created_at DESC
+    LIMIT 3
+")->fetch_all(MYSQLI_ASSOC);
 
-    } elseif ($id && $action === 'reject') {
-        $s = $conn->prepare("DELETE FROM driver WHERE id = ? AND is_verified = 0");
-        $s->bind_param('i', $id); $s->execute();
-        log_activity($conn, "Driver ID $id registration was rejected");
-        $flash = 'Application rejected.';
+$activities    = $conn->query("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8")->fetch_all(MYSQLI_ASSOC);
+$announcements = $conn->query("SELECT * FROM announcement ORDER BY created_at DESC LIMIT 3")->fetch_all(MYSQLI_ASSOC);
 
-    } elseif ($id && $action === 'suspend') {
-        $reason = mb_substr(trim($_POST['reason'] ?? ''), 0, 200);
-        $reason = $reason !== '' ? $reason : null;
-        $s = $conn->prepare(
-            "UPDATE driver SET is_suspended = 1, suspended_at = NOW(), suspended_reason = ?
-             WHERE id = ? AND is_verified = 1"
-        );
-        $s->bind_param('si', $reason, $id); $s->execute();
-        log_activity($conn, "Driver ID $id was suspended by admin" . ($reason ? " (Reason: $reason)" : ''));
-        $flash = 'Driver suspended.';
-
-    } elseif ($id && $action === 'reactivate') {
-        $s = $conn->prepare(
-            "UPDATE driver SET is_suspended = 0, suspended_at = NULL, suspended_reason = NULL WHERE id = ?"
-        );
-        $s->bind_param('i', $id); $s->execute();
-        log_activity($conn, "Driver ID $id was reactivated by admin");
-        $flash = 'Driver reactivated.';
+// Label from minutes since last activity (NULL = never seen)
+if (!function_exists('lastSeenLabel')) {
+    function lastSeenLabel($mins) {
+        if ($mins === null) return 'Never';
+        $mins = (int)$mins;
+        if ($mins <= 5)   return 'Online';
+        if ($mins < 60)   return $mins . ' min ago';
+        if ($mins < 1440) return floor($mins / 60) . 'h ago';
+        return floor($mins / 1440) . 'd ago';
     }
-
-    if ($flash) $_SESSION['flash'] = $flash;
-    header('Location: driver_approvals.php');
-    exit;
 }
 
-$flash = $_SESSION['flash'] ?? null;
-unset($_SESSION['flash']);
-
-// Pending drivers
-$pending = $conn->query("SELECT * FROM driver WHERE is_verified=0 ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
-
-// Approved drivers (suspended ones listed last)
-$approved = $conn->query(
-    "SELECT id, first_name, last_name, email, phone, location, driver_license, license_number,
-            is_suspended, suspended_reason, suspended_at, created_at
-     FROM driver WHERE is_verified=1
-     ORDER BY is_suspended ASC, created_at DESC LIMIT 50"
-)->fetch_all(MYSQLI_ASSOC);
+// Active admin accounts (minutes computed in SQL so timezones don't matter)
+$active_admins = $conn->query("
+    SELECT id, name, username,
+           TIMESTAMPDIFF(MINUTE, last_active, NOW()) AS mins_ago
+    FROM admin
+    WHERE status = 'active'
+    ORDER BY last_active DESC
+")->fetch_all(MYSQLI_ASSOC);
 
 include '../includes/admin_header.php';
 ?>
 
-<style>
-.approval-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
-@media(max-width:768px){.approval-grid{grid-template-columns:1fr}}
-
-.driver-card{background:white;border-radius:12px;border:1.5px solid #e0e8f4;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}
-.driver-card.clickable{cursor:pointer;transition:box-shadow .15s,transform .1s,border-color .15s}
-.driver-card.clickable:hover{box-shadow:0 6px 20px rgba(0,0,0,0.1);transform:translateY(-2px);border-color:#1a73e8}
-.driver-card.is-suspended{background:#fff8f8;border-color:#ffcdd2}
-.dc-top{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}
-.dc-avatar{width:50px;height:50px;background:#e8f0fe;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
-.dc-info{flex:1}
-.dc-name{font-size:16px;font-weight:800;color:#0d1b2a;margin-bottom:2px}
-.dc-meta{font-size:12px;color:#6b7a99;font-weight:600}
-.dc-location{font-size:13px;font-weight:600;color:#0d1b2a;margin-bottom:3px}
-.dc-date{font-size:11px;color:#9baabb;font-weight:600}
-.dc-license{font-size:13px;font-weight:700;color:#0d1b2a;margin:8px 0 4px}
-.dc-reason{font-size:12px;color:#c62828;font-weight:700;margin-top:8px}
-.license-photo{width:100%;max-height:180px;object-fit:contain;border:2px solid #e0e8f4;border-radius:10px;margin-top:8px;cursor:pointer}
-.license-photo:hover{opacity:0.9}
-
-.dc-actions{display:flex;gap:8px;margin-top:16px}
-.btn-approve{padding:9px 18px;background:#00897b;color:white;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}
-.btn-approve:hover{background:#00695c}
-.btn-reject{padding:9px 18px;background:#fff;color:#e53935;border:1.5px solid #ffcdd2;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}
-.btn-reject:hover{background:#fff0f0}
-.btn-suspend{padding:8px 16px;background:#fff;color:#e53935;border:1.5px solid #ffcdd2;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer}
-.btn-suspend:hover{background:#fff0f0}
-.btn-reactivate{padding:8px 16px;background:#00897b;color:white;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer}
-.btn-reactivate:hover{background:#00695c}
-.btn-cancel{padding:9px 18px;background:#eef1f6;color:#333;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}
-
-.pending-badge{display:inline-flex;align-items:center;gap:4px;background:#fff8e1;color:#f57c00;border:1px solid #ffe082;border-radius:20px;font-size:11px;font-weight:800;padding:3px 10px;margin-bottom:14px}
-.approved-badge{display:inline-flex;align-items:center;gap:4px;background:#e0f2f1;color:#00695c;border:1px solid #b2dfdb;border-radius:20px;font-size:11px;font-weight:800;padding:3px 10px}
-.suspended-badge{display:inline-flex;align-items:center;gap:4px;background:#ffebee;color:#c62828;border:1px solid #ffcdd2;border-radius:20px;font-size:11px;font-weight:800;padding:3px 10px}
-
-.empty-card{background:white;border-radius:12px;border:1.5px solid #e0e8f4;padding:32px;text-align:center;color:#9baabb}
-.empty-card .ei{font-size:48px;margin-bottom:8px;opacity:0.4}
-.section-title{font-size:18px;font-weight:900;color:#0d1b2a;margin-bottom:14px;display:flex;align-items:center;gap:8px}
-.count-badge{background:#1a73e8;color:white;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:800}
-.count-badge.orange{background:#ff6d00}
-.hint{font-size:12px;color:#9baabb;font-weight:600;margin:-8px 0 14px}
-
-/* Details modal */
-.dm-wide{max-width:560px;max-height:90vh;overflow-y:auto}
-.dm-head{display:flex;align-items:center;gap:14px;margin-bottom:18px}
-.dm-pic{width:64px;height:64px;border-radius:50%;background:#e8f0fe;display:flex;align-items:center;justify-content:center;font-size:30px;overflow:hidden;flex-shrink:0}
-.dm-pic img{width:100%;height:100%;object-fit:cover}
-.dm-name{font-size:20px;font-weight:900;color:#0d1b2a}
-.dm-rows{display:grid;grid-template-columns:130px 1fr;gap:8px 12px;font-size:14px}
-.dm-rows .k{color:#6b7a99;font-weight:800}
-.dm-rows .v{color:#0d1b2a;font-weight:700;word-break:break-word}
-.dm-lic{width:100%;max-height:240px;object-fit:contain;border:2px solid #e0e8f4;border-radius:10px;margin-top:14px;cursor:pointer}
-.dm-susp{background:#ffebee;border:1px solid #ffcdd2;color:#c62828;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin-bottom:16px}
-</style>
-
-<script>
-// Replaces a broken image with a clear message instead of the browser's broken-image icon.
-function photoMissing(img) {
-    const p = document.createElement('p');
-    p.style.cssText = 'color:#e53935;font-size:13px;margin-top:8px;font-weight:700';
-    p.textContent = 'License photo unavailable. Ask the driver to upload it again.';
-    img.replaceWith(p);
-}
-</script>
-
-<?php if ($flash): ?>
-    <div class="alert alert-success"><?= htmlspecialchars($flash) ?></div>
+<?php if (isset($_SESSION['success'])): ?>
+    <div class="alert alert-success"><?= htmlspecialchars($_SESSION['success']) ?></div>
+    <?php unset($_SESSION['success']); ?>
 <?php endif; ?>
 
-<div class="section-title">⏳ Pending Approval <span class="count-badge orange"><?= count($pending) ?></span></div>
-
-<?php if (empty($pending)): ?>
-    <div class="empty-card">
-        <div class="ei">✅</div>
-        <p style="font-size:14px;font-weight:700">No pending driver applications</p>
+<!-- STATS -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#e3f2fd;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#1a73e8"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
     </div>
-<?php else: ?>
-    <div class="approval-grid">
-    <?php foreach ($pending as $d):
-        $licNo  = $d['driver_license'] ?: ($d['license_number'] ?? '');
-        $licImg = photo_src($d['license_photo'] ?? '');
-    ?>
-        <div class="driver-card">
-            <div class="pending-badge">⏳ Awaiting Approval</div>
-
-            <div class="dc-top">
-                <div class="dc-avatar">🚛</div>
-                <div class="dc-info">
-                    <div class="dc-name"><?= htmlspecialchars($d['first_name'] . ' ' . $d['last_name']) ?></div>
-                    <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
-                </div>
-            </div>
-
-            <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
-            <div class="dc-date">Registered: <?= date('M j, Y g:i A', strtotime($d['created_at'])) ?></div>
-
-            <?php if (!empty($licNo)): ?>
-                <div class="dc-license">Driver's License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
-            <?php endif; ?>
-
-            <?php if ($licImg): ?>
-                <img src="<?= htmlspecialchars($licImg) ?>" class="license-photo" alt="Driver's License"
-                     onclick="openImage(this.src)" onerror="photoMissing(this)">
-            <?php else: ?>
-                <p style="color:#e53935;font-size:13px;margin-top:8px;">No license photo uploaded</p>
-            <?php endif; ?>
-
-            <div class="dc-actions">
-                <form method="POST" style="display:contents">
-                    <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                    <input type="hidden" name="action" value="approve">
-                    <button type="submit" class="btn-approve" onclick="return confirm('Approve this driver?')">✅ Approve</button>
-                </form>
-                <form method="POST" style="display:contents">
-                    <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                    <input type="hidden" name="action" value="reject">
-                    <button type="submit" class="btn-reject" onclick="return confirm('Reject and delete this application?')">✗ Reject</button>
-                </form>
-            </div>
-        </div>
-    <?php endforeach; ?>
+    <div class="stat-info">
+      <div class="num"><?= $total_complaints ?></div>
+      <div class="lbl">Total Complaints</div>
     </div>
-<?php endif; ?>
-
-<!-- Approved Drivers -->
-<div class="section-title" style="margin-top:30px">✅ Approved Drivers <span class="count-badge"><?= count($approved) ?></span></div>
-<?php if (!empty($approved)): ?><p class="hint">Click a driver to view their full details.</p><?php endif; ?>
-
-<?php if (empty($approved)): ?>
-    <div class="empty-card">
-        <div class="ei">🚛</div>
-        <p style="font-size:14px;font-weight:700">No approved drivers yet</p>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#fff8e1;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#f9a825"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
     </div>
-<?php else: ?>
-    <div class="approval-grid">
-    <?php foreach ($approved as $d):
-        $susp  = (int)$d['is_suspended'] === 1;
-        $licNo = $d['driver_license'] ?: ($d['license_number'] ?? '');
-        $fullName = $d['first_name'] . ' ' . $d['last_name'];
-    ?>
-        <div class="driver-card clickable <?= $susp ? 'is-suspended' : '' ?>"
-             onclick="openDetails(<?= (int)$d['id'] ?>)">
-            <?php if ($susp): ?>
-                <span class="suspended-badge">⛔ Suspended</span>
-            <?php else: ?>
-                <span class="approved-badge">✅ Approved</span>
-            <?php endif; ?>
-
-            <div class="dc-top" style="margin-top:8px">
-                <div class="dc-avatar">🚛</div>
-                <div class="dc-info">
-                    <div class="dc-name"><?= htmlspecialchars($fullName) ?></div>
-                    <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
-                </div>
-            </div>
-            <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
-
-            <?php if (!empty($licNo)): ?>
-                <div style="margin-top:8px;font-size:13px;">License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
-            <?php endif; ?>
-
-            <?php if ($susp && !empty($d['suspended_reason'])): ?>
-                <div class="dc-reason">Reason: <?= htmlspecialchars($d['suspended_reason']) ?></div>
-            <?php endif; ?>
-
-            <div class="dc-actions">
-                <?php if ($susp): ?>
-                    <form method="POST" style="display:contents" onclick="event.stopPropagation()">
-                        <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                        <input type="hidden" name="action" value="reactivate">
-                        <button type="submit" class="btn-reactivate"
-                                onclick="event.stopPropagation(); return confirm('Reactivate this driver?')">♻ Reactivate</button>
-                    </form>
-                <?php else: ?>
-                    <button type="button" class="btn-suspend"
-                            onclick="event.stopPropagation(); openSuspend(<?= (int)$d['id'] ?>, <?= htmlspecialchars(json_encode($fullName), ENT_QUOTES) ?>)">
-                        ⛔ Suspend
-                    </button>
-                <?php endif; ?>
-            </div>
-        </div>
-    <?php endforeach; ?>
+    <div class="stat-info">
+      <div class="num"><?= $pending_complaints ?></div>
+      <div class="lbl">Pending Complaints</div>
     </div>
-<?php endif; ?>
-
-<!-- Suspend modal -->
-<div class="modal-overlay" id="suspendModal" onclick="if(event.target===this)closeModals()">
-    <div class="modal">
-        <div class="modal-header">Suspend Driver</div>
-        <form method="POST">
-            <div class="modal-body">
-                <p style="font-size:14px;font-weight:700;margin-bottom:14px">
-                    Suspend <span id="suspendName"></span>? They will be logged out of the app and
-                    won't be able to log in until you reactivate them.
-                </p>
-                <input type="hidden" name="driver_id" id="suspendId">
-                <input type="hidden" name="action" value="suspend">
-                <div class="form-group">
-                    <label>Reason (optional)</label>
-                    <textarea class="form-control" name="reason" maxlength="200" style="min-height:80px"
-                              placeholder="e.g. Multiple missed collections"></textarea>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn-cancel" onclick="closeModals()">Cancel</button>
-                <button type="submit" class="btn-reject" style="background:#e53935;color:white;border-color:#e53935">Suspend</button>
-            </div>
-        </form>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#e8f5e9;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#2e7d32"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
     </div>
+    <div class="stat-info">
+      <div class="num"><?= $resolved_complaints ?></div>
+      <div class="lbl">Resolved Complaints</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#fce4ec;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="#c2185b"><path d="M18 11v2H6v-2H4v2c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-2h-2zM12 2L6.5 8H10v7h4V8h3.5L12 2z"/></svg>
+    </div>
+    <div class="stat-info">
+      <div class="num"><?= $total_announcements ?></div>
+      <div class="lbl">Total Announcements</div>
+    </div>
+  </div>
 </div>
 
-<!-- Details modal -->
-<div class="modal-overlay" id="detailModal" onclick="if(event.target===this)closeModals()">
-    <div class="modal dm-wide">
-        <div class="modal-header">Driver Details</div>
-        <div class="modal-body" id="detailBody">Loading…</div>
-        <div class="modal-footer">
-            <button type="button" class="btn-cancel" onclick="closeModals()">Close</button>
-        </div>
+<!-- COMPLAINTS + ACTIVITIES -->
+<div class="dashboard-grid">
+
+  <!-- Recent Complaints -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Recent Complaints</h2>
+      <a href="complaints.php" class="btn btn-primary btn-sm">View All Complaints</a>
     </div>
+    <div class="card-body">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>Resident</th>
+            <th>Barangay</th>
+            <th>Waste Type</th>
+            <th>Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($complaints as $c):
+            $barangay   = !empty($c['barangay']) ? $c['barangay'] : 'Not specified';
+            $waste_type = !empty($c['waste_type']) ? $c['waste_type'] : '—';
+
+            // Prefer the resident's saved profile name; fall back to the name stored on the complaint.
+            $profile_name = trim(($c['r_first_name'] ?? '') . ' ' . ($c['r_last_name'] ?? ''));
+            $display_name = $profile_name !== '' ? $profile_name : ($c['resident_name'] ?? 'Unknown Resident');
+          ?>
+          <tr>
+            <td><strong>#<?= htmlspecialchars($c['id'] ?? '—') ?></strong></td>
+            <td>
+              <span class="badge <?= ($c['status'] ?? 'Pending') === 'Pending' ? 'badge-pending' : 'badge-resolved' ?>">
+                <?= htmlspecialchars($c['status'] ?? 'Pending') ?>
+              </span>
+            </td>
+            <td style="font-weight:700;font-size:14px;"><?= htmlspecialchars($display_name) ?></td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($barangay) ?></td>
+            <td style="font-size:13.5px;"><?= htmlspecialchars($waste_type) ?></td>
+            <td style="font-size:13px;color:#555;white-space:nowrap;"><?= date('M d, Y', strtotime($c['created_at'] ?? 'now')) ?></td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-sm btn-primary" onclick="viewComplaint(<?= htmlspecialchars(json_encode($c), ENT_QUOTES) ?>)">View</button>
+              <?php if (($c['status'] ?? '') === 'Pending'): ?>
+                <button class="btn btn-sm btn-success" style="margin-left:4px;"
+                        onclick="resolveComplaint(<?= (int)$c['id'] ?>, <?= htmlspecialchars(json_encode($display_name), ENT_QUOTES) ?>)">
+                  Resolve
+                </button>
+              <?php endif; ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recent Activities -->
+  <div class="card">
+    <div class="card-header"><h2>Recent Activities</h2></div>
+    <div class="card-body">
+      <?php foreach ($activities as $a): ?>
+      <div class="activity-item">
+        <div class="activity-bell">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#1a73e8"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div class="activity-text"><?= htmlspecialchars($a['action'] ?? 'System activity') ?></div>
+          <div class="activity-time"><?= timeAgo($a['created_at'] ?? date('Y-m-d H:i:s')) ?></div>
+        </div>
+        <a href="complaints.php" class="btn-view">View →</a>
+      </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+</div>
+
+<!-- ADMINS -->
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <h2>Admins</h2>
+    <a href="settings.php" class="btn btn-primary btn-sm">Manage Admins</a>
+  </div>
+  <div class="card-body">
+    <?php foreach ($active_admins as $ad):
+      $online = $ad['mins_ago'] !== null && (int)$ad['mins_ago'] <= 5;
+    ?>
+    <div class="activity-item">
+      <div class="activity-bell" style="background:#e8f5e9;font-weight:700;color:#2e7d32;">
+        <?= htmlspecialchars(strtoupper(substr($ad['name'], 0, 1))) ?>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="activity-text"><?= htmlspecialchars($ad['name']) ?></div>
+        <div class="activity-time">@<?= htmlspecialchars($ad['username'] ?? '') ?></div>
+      </div>
+      <div style="font-size:12px;font-weight:700;white-space:nowrap;color:<?= $online ? '#2e7d32' : '#888' ?>;">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:<?= $online ? '#2e7d32' : '#bbb' ?>;"></span>
+        <?= htmlspecialchars(lastSeenLabel($ad['mins_ago'])) ?>
+      </div>
+    </div>
+    <?php endforeach; ?>
+  </div>
+</div>
+
+<!-- ANNOUNCEMENTS -->
+<div class="card">
+  <div class="card-header">
+    <h2>Recent Announcements</h2>
+    <button class="btn btn-primary btn-sm" onclick="openAnnouncementModal()">+ Create Announcement</button>
+  </div>
+  <div class="card-body">
+    <?php foreach ($announcements as $ann): ?>
+    <div class="activity-item">
+      <div class="activity-bell" style="background:#fff3e0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#f57c00"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="activity-text"><?= htmlspecialchars($ann['title'] ?? 'Untitled') ?></div>
+        <div class="activity-time"><?= htmlspecialchars(substr($ann['message'] ?? '', 0, 65)) ?>...</div>
+        <div style="margin-top:3px;">
+          <span class="badge badge-<?= htmlspecialchars($ann['target_audience'] ?? 'all') ?>">
+            <?= htmlspecialchars(ucfirst($ann['target_audience'] ?? 'all')) ?>
+          </span>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#aaa;text-align:right;">
+        <?= timeAgo($ann['created_at'] ?? date('Y-m-d H:i:s')) ?>
+      </div>
+    </div>
+    <?php endforeach; ?>
+  </div>
+</div>
+
+<!-- VIEW COMPLAINT MODAL -->
+<div class="modal-overlay" id="viewModal">
+  <div class="modal" style="max-width:620px;">
+    <div class="modal-header" id="viewModalTitle">Complaint Details</div>
+    <div class="modal-body" id="viewModalBody"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn" onclick="closeViewModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- RESOLVE MODAL -->
+<div class="modal-overlay" id="resolveModal">
+  <div class="modal">
+    <div class="modal-header">Resolve Complaint</div>
+    <form method="POST">
+      <div class="modal-body">
+        <p style="margin-bottom:16px;font-size:14px;">Resolving complaint from <strong id="resolveName"></strong>.</p>
+        <input type="hidden" name="resolve_id" id="resolveId">
+        <div class="form-group">
+          <label>Admin Notes (optional)</label>
+          <textarea name="admin_notes" class="form-control" placeholder="Add notes about resolution..." rows="4"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeResolveModal()">Cancel</button>
+        <button type="submit" class="btn btn-success">Mark as Resolved</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ANNOUNCEMENT MODAL -->
+<div class="modal-overlay" id="announcementModal">
+  <div class="modal">
+    <div class="modal-header">Create Announcement</div>
+    <form method="POST" action="announcements.php">
+      <div class="modal-body">
+        <div id="modalAlert"></div>
+        <div class="form-group">
+          <label>Title <span class="req">*</span></label>
+          <input type="text" name="title" class="form-control" placeholder="Enter announcement title..." required>
+        </div>
+        <div class="form-group">
+          <label>Message <span class="req">*</span></label>
+          <textarea name="message" class="form-control" placeholder="Enter announcement message..." required></textarea>
+        </div>
+        <div class="form-group">
+          <label>Target Audience</label>
+          <div class="radio-group">
+            <label class="radio-label"><input type="radio" name="target_audience" value="residents"> All Residents</label>
+            <label class="radio-label"><input type="radio" name="target_audience" value="drivers"> All Drivers</label>
+            <label class="radio-label"><input type="radio" name="target_audience" value="all" checked> All Users</label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeAnnouncementModal()">Cancel</button>
+        <button type="submit" name="create_announcement" class="btn btn-primary">Publish Announcement</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <script>
-function closeModals() {
-    document.getElementById('suspendModal').classList.remove('open');
-    document.getElementById('detailModal').classList.remove('open');
-}
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
-
-function openImage(src) {
-    // data: URIs can't be opened via window.open in most browsers, so write an <img> into a new tab
-    const w = window.open();
-    if (w) { w.document.write('<img src="' + src + '" style="max-width:100%">'); }
+// Escapes text before it is placed into HTML (prevents injected markup from running).
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 
-function openSuspend(id, name) {
-    document.getElementById('suspendId').value = id;
-    document.getElementById('suspendName').textContent = name;
-    document.getElementById('suspendModal').classList.add('open');
+function viewComplaint(c) {
+  const concernText = c.concern || '';
+
+  // Older complaints may still have these tags inside the free-text concern.
+  const locMatch   = concernText.match(/\[Location:\s*([^\]]+)\]/i);
+  const typeMatch  = concernText.match(/\[Type:\s*([^\]]+)\]/i);
+  const videoMatch = concernText.match(/\[Video:\s*([^\]]+)\]/i);
+
+  const barangay  = c.barangay || (locMatch ? locMatch[1] : '—');
+  const wasteType = c.waste_type || (typeMatch ? typeMatch[1] : '—');
+  const videoPath = videoMatch ? videoMatch[1].trim() : null;
+
+  let description = concernText
+    .replace(/\[Location:[^\]]*\]\s*/i, '')
+    .replace(/\[Type:[^\]]*\]\s*/i, '')
+    .replace(/\[Video:[^\]]*\]\s*/i, '')
+    .trim();
+
+  const fullName = [c.r_first_name, c.r_last_name].filter(Boolean).join(' ')
+                   || c.resident_name || '—';
+
+  const residentHTML = `
+    <div style="background:#f4f8ff;padding:16px;border-radius:10px;border:1px solid #dbe7ff;">
+      <strong>Resident Details</strong>
+      <div style="margin-top:8px;display:grid;gap:4px;font-size:14px;word-break:break-word;">
+        <div><strong>Name:</strong> ${esc(fullName)}</div>
+        <div><strong>Phone:</strong> ${esc(c.r_phone || c.resident_phone || '—')}</div>
+        <div><strong>Email:</strong> ${esc(c.r_email || '—')}</div>
+        <div><strong>Home Barangay:</strong> ${esc(c.r_barangay || '—')}</div>
+        <div><strong>Household Address:</strong> ${esc(c.r_household_address || '—')}</div>
+      </div>
+    </div>`;
+
+  let photoHTML = '';
+  if (c.photo && c.photo.trim() !== '') {
+    photoHTML = `
+      <div style="margin:15px 0;">
+        <strong>📷 Attached Photo:</strong><br>
+        <img src="../${esc(c.photo)}"
+             style="max-width:100%;height:auto;border-radius:10px;border:2px solid #e0e8f4;margin-top:8px;cursor:pointer;"
+             onclick="window.open('../${esc(c.photo)}', '_blank')"
+             alt="Complaint Photo">
+      </div>`;
+  }
+
+  let videoHTML = '';
+  if (videoPath) {
+    videoHTML = `
+      <div style="margin:15px 0;">
+        <strong>🎥 Attached Video:</strong><br>
+        <video controls playsinline
+               style="max-width:100%;width:100%;border-radius:10px;border:2px solid #ede9fe;margin-top:8px;background:#000;">
+          <source src="../${esc(videoPath)}">
+          Your browser does not support the video tag.
+        </video>
+        <div style="margin-top:6px;">
+          <a href="../${esc(videoPath)}" target="_blank" download
+             style="font-size:12px;color:#7c3aed;font-weight:700;text-decoration:none;">
+            ⬇️ Download Video
+          </a>
+        </div>
+      </div>`;
+  }
+
+  document.getElementById('viewModalTitle').textContent = `Complaint #${c.id} — ${c.status}`;
+
+  document.getElementById('viewModalBody').innerHTML = `
+    <div style="display:grid;gap:14px;line-height:1.6;">
+      ${residentHTML}
+      <div><strong>Barangay:</strong> ${esc(barangay)}</div>
+      <div><strong>Waste Type:</strong> ${esc(wasteType)}</div>
+      <div><strong>Status:</strong>
+        <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${esc(c.status)}</span>
+      </div>
+      <div><strong>Date Filed:</strong> ${esc(c.created_at)}</div>
+      ${photoHTML}
+      ${videoHTML}
+      <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
+        <strong>Description:</strong><br>
+        <span style="font-size:14.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word;">${esc(description) || '—'}</span>
+      </div>
+      ${c.admin_notes ? `
+      <div style="background:#f0fff4;padding:16px;border-radius:10px;border:1px solid #c3e6cb;">
+        <strong>Admin Notes:</strong><br>
+        <span style="white-space:pre-wrap;word-break:break-word;">${esc(c.admin_notes)}</span>
+      </div>` : ''}
+    </div>
+  `;
+
+  document.getElementById('viewModal').classList.add('open');
 }
 
-function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
+function closeViewModal() {
+  const video = document.querySelector('#viewModalBody video');
+  if (video) { video.pause(); video.currentTime = 0; }
+  document.getElementById('viewModal').classList.remove('open');
 }
 
-function fmtDate(s) {
-    if (!s) return '—';
-    const d = new Date(s.replace(' ', 'T'));
-    return isNaN(d) ? s : d.toLocaleString([], {year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+function resolveComplaint(id, name) {
+  document.getElementById('resolveId').value = id;
+  document.getElementById('resolveName').textContent = name;
+  document.getElementById('resolveModal').classList.add('open');
 }
 
-async function openDetails(id) {
-    const body = document.getElementById('detailBody');
-    body.textContent = 'Loading…';
-    document.getElementById('detailModal').classList.add('open');
-    try {
-        const res = await fetch('driver_approvals.php?detail=' + encodeURIComponent(id));
-        if (!res.ok) throw new Error('Request failed');
-        const d = await res.json();
-        body.textContent = '';
+function closeResolveModal() {
+  document.getElementById('resolveModal').classList.remove('open');
+}
 
-        if (Number(d.is_suspended) === 1) {
-            let t = '⛔ Suspended on ' + fmtDate(d.suspended_at);
-            if (d.suspended_reason) t += ' — ' + d.suspended_reason;
-            body.appendChild(el('div', 'dm-susp', t));
-        }
-
-        const head = el('div', 'dm-head');
-        const pic = el('div', 'dm-pic');
-        if (d.pic_src) { const img = document.createElement('img'); img.src = d.pic_src; pic.appendChild(img); }
-        else pic.textContent = '🚛';
-        head.appendChild(pic);
-        head.appendChild(el('div', 'dm-name', (d.first_name || '') + ' ' + (d.last_name || '')));
-        body.appendChild(head);
-
-        const rows = [
-            ['Email', d.email], ['Phone', d.phone],
-            ['Barangay', d.barangay], ['Municipality', d.municipality], ['Province', d.province],
-            ['Household address', d.household_address], ['Location', d.location],
-            ['License number', d.license_no],
-            ['Status', Number(d.is_suspended) === 1 ? 'Suspended' : (Number(d.is_verified) === 1 ? 'Approved' : 'Pending')],
-            ['Registered', fmtDate(d.created_at)]
-        ];
-        const grid = el('div', 'dm-rows');
-        rows.forEach(([k, v]) => { grid.appendChild(el('div', 'k', k)); grid.appendChild(el('div', 'v', v || '—')); });
-        body.appendChild(grid);
-
-        if (d.license_src) {
-            const label = el('div', null, "Driver's license photo");
-            label.style.cssText = 'margin-top:16px;font-weight:800;color:#6b7a99;font-size:14px';
-            body.appendChild(label);
-            const img = document.createElement('img');
-            img.src = d.license_src; img.className = 'dm-lic'; img.alt = "Driver's license";
-            img.onclick = () => openImage(img.src);
-            img.onerror = () => photoMissing(img);
-            body.appendChild(img);
-        }
-    } catch (e) {
-        body.textContent = 'Could not load driver details.';
+document.querySelectorAll('.modal-overlay').forEach(modal => {
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) {
+      const video = this.querySelector('video');
+      if (video) { video.pause(); video.currentTime = 0; }
+      this.classList.remove('open');
     }
-}
+  });
+});
+
+function openAnnouncementModal()  { document.getElementById('announcementModal').classList.add('open'); }
+function closeAnnouncementModal() { document.getElementById('announcementModal').classList.remove('open'); }
 </script>
 
 <?php include '../includes/admin_footer.php'; ?>
