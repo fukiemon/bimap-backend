@@ -98,8 +98,13 @@ if (isset($_POST['resolve_id'])) {
     $id = (int)$_POST['resolve_id'];
     $notes = trim($_POST['admin_notes'] ?? '');
 
-    $stmt = $conn->prepare("UPDATE complaint SET status='Resolved', admin_notes=? WHERE id=?");
-    $stmt->bind_param("si", $notes, $id);
+    // Real Philippine time (UTC+8), independent of the server / database timezone.
+    // Requires the resolved_at column:
+    //   ALTER TABLE complaint ADD COLUMN resolved_at DATETIME NULL AFTER status;
+    $now = (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d H:i:s');
+
+    $stmt = $conn->prepare("UPDATE complaint SET status='Resolved', admin_notes=?, resolved_at=? WHERE id=?");
+    $stmt->bind_param("ssi", $notes, $now, $id);
     $stmt->execute();
 
     $stmt2 = $conn->prepare("SELECT resident_name FROM complaint WHERE id=?");
@@ -429,6 +434,7 @@ function viewComplaint(c) {
         <span class="badge ${c.status === 'Pending' ? 'badge-pending' : 'badge-resolved'}">${esc(c.status)}</span>
       </div>
       <div><strong>Date Filed:</strong> ${esc(c.created_at)}</div>
+      ${c.resolved_at ? `<div><strong>Date Resolved:</strong> ${esc(c.resolved_at)}</div>` : ''}
       ${photoHTML}
       ${videoHTML}
       <div style="background:#f8faff;padding:16px;border-radius:10px;border:1px solid #e3ecff;">
