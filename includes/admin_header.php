@@ -537,7 +537,7 @@ if (isset($conn)) {
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
         Dashboard
       </a>
-      <a href="driver_approvals.php" class="nav-item <?= ($active_nav??'') === 'driver_approvals' ? 'active' : '' ?>">
+      <a href="driver-approvals.php" class="nav-item <?= ($active_nav??'') === 'driver_approvals' ? 'active' : '' ?>">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
         Driver Approvals
         <?php if ($pendingDriverCount > 0): ?>
