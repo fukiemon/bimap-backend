@@ -45,7 +45,10 @@ function getDeviceTokens(mysqli $conn, string $userType, ?int $userId = null): a
 /** Sends one notification to a list of phone tokens. */
 function sendPush(mysqli $conn, array $tokens, string $title, string $body, array $data = []): void {
     $tokens = array_values(array_unique(array_filter($tokens)));
-    if (!$tokens) return;
+    if (!$tokens) {
+        error_log('Push skipped: no saved phone tokens for this recipient.');
+        return;
+    }
 
     try {
         $messaging = firebase_messaging();
@@ -76,6 +79,11 @@ function sendPush(mysqli $conn, array $tokens, string $title, string $body, arra
     } catch (Throwable $e) {
         error_log('Push failed: ' . $e->getMessage());
     }
+}
+
+/** Notifies ONE user's phone(s). $userType is 'resident' or 'driver'. */
+function pushToUser(mysqli $conn, string $userType, int $userId, string $title, string $body, array $data = []): void {
+    sendPush($conn, getDeviceTokens($conn, $userType, $userId), $title, $body, $data);
 }
 
 /** Notifies the right people for an announcement (residents, drivers, or everyone). */
