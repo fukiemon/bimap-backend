@@ -6,13 +6,24 @@ requireAdminLogin(); // must run BEFORE any POST/GET handling below
 $page_title = 'Driver Approvals';
 $active_nav = 'driver_approvals';
 
+// Host where your API / driver app saves uploaded files, e.g. 'https://your-api-host.com'
+// (no trailing slash). Leave empty only if the uploads folder sits in the same
+// project as this admin folder.
+$DRIVER_UPLOAD_BASE = '';
+
 // Turns a stored photo value into something usable in <img src>.
-// Old rows may hold a base64 data URI; newer ones hold a relative file path.
+// Handles base64 data URIs, full URLs, and relative file paths.
 function photo_src($v) {
-    $v = (string)$v;
+    global $DRIVER_UPLOAD_BASE;
+    $v = trim((string)$v);
     if ($v === '') return null;
-    if (strncmp($v, 'data:', 5) === 0) return $v;
-    return '../' . ltrim($v, '/');
+    if (strncmp($v, 'data:', 5) === 0 || preg_match('#^https?://#i', $v)) return $v;
+
+    $clean = ltrim(str_replace('\\', '/', $v), '/');
+    if (!empty($DRIVER_UPLOAD_BASE)) {
+        return rtrim($DRIVER_UPLOAD_BASE, '/') . '/' . $clean;
+    }
+    return '../' . $clean;
 }
 
 function log_activity($conn, $text) {
@@ -328,7 +339,7 @@ function closeModals() {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
 
 function openImage(src) {
-    // data: URIs can't be opened via window.open in most browsers, so use a modal-free fallback
+    // data: URIs can't be opened via window.open in most browsers, so write an <img> into a new tab
     const w = window.open();
     if (w) { w.document.write('<img src="' + src + '" style="max-width:100%">'); }
 }
@@ -389,7 +400,9 @@ async function openDetails(id) {
         body.appendChild(grid);
 
         if (d.license_src) {
-            body.appendChild(el('div', 'dm-rows k', "Driver's license photo")).style.cssText = 'margin-top:16px;font-weight:800;color:#6b7a99;font-size:14px';
+            const label = el('div', null, "Driver's license photo");
+            label.style.cssText = 'margin-top:16px;font-weight:800;color:#6b7a99;font-size:14px';
+            body.appendChild(label);
             const img = document.createElement('img');
             img.src = d.license_src; img.className = 'dm-lic'; img.alt = "Driver's license";
             img.onclick = () => openImage(img.src);
