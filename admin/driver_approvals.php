@@ -174,6 +174,16 @@ include '../includes/admin_header.php';
 .dm-susp{background:#ffebee;border:1px solid #ffcdd2;color:#c62828;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;margin-bottom:16px}
 </style>
 
+<script>
+// Replaces a broken image with a clear message instead of the browser's broken-image icon.
+function photoMissing(img) {
+    const p = document.createElement('p');
+    p.style.cssText = 'color:#e53935;font-size:13px;margin-top:8px;font-weight:700';
+    p.textContent = 'License photo unavailable. Ask the driver to upload it again.';
+    img.replaceWith(p);
+}
+</script>
+
 <?php if ($flash): ?>
     <div class="alert alert-success"><?= htmlspecialchars($flash) ?></div>
 <?php endif; ?>
@@ -211,7 +221,7 @@ include '../includes/admin_header.php';
 
             <?php if ($licImg): ?>
                 <img src="<?= htmlspecialchars($licImg) ?>" class="license-photo" alt="Driver's License"
-                     onclick="openImage(this.src)">
+                     onclick="openImage(this.src)" onerror="photoMissing(this)">
             <?php else: ?>
                 <p style="color:#e53935;font-size:13px;margin-top:8px;">No license photo uploaded</p>
             <?php endif; ?>
@@ -406,6 +416,7 @@ async function openDetails(id) {
             const img = document.createElement('img');
             img.src = d.license_src; img.className = 'dm-lic'; img.alt = "Driver's license";
             img.onclick = () => openImage(img.src);
+            img.onerror = () => photoMissing(img);
             body.appendChild(img);
         }
     } catch (e) {
