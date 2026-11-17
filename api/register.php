@@ -57,13 +57,9 @@ $DRIVER_COLS = [
     'is_verified'       => 'is_verified',         // 0 = pending admin approval
 ];
 
-// 'db'   = save the license photo inside the database (license_photo column,
-//          mediumtext). Works on hosts that delete uploaded files on redeploy.
-// 'file' = save the photo as a file under uploads/licenses/ (needs a host
-//          that keeps files permanently).
-$PHOTO_MODE    = 'db';
-$UPLOAD_DIR_FS = __DIR__ . '/../uploads/licenses/';   // only used when $PHOTO_MODE = 'file'
-$UPLOAD_DIR_DB = 'uploads/licenses/';                 // only used when $PHOTO_MODE = 'file'
+$PHOTO_MODE    = 'file';
+$UPLOAD_DIR_FS = __DIR__ . '/../uploads/licenses/';
+$UPLOAD_DIR_DB = 'uploads/licenses/';
 // ================================================================
 
 function fail(string $msg, int $status = 400): void
@@ -258,9 +254,7 @@ if ($role === 'resident') {
         $savedFile  = $UPLOAD_DIR_FS . $name;
         $photoValue = $UPLOAD_DIR_DB . $name;
     } else {
-        // 'db' mode: store the validated photo as a clean data URI
-        // (rebuilt from the verified MIME type, not the raw client string).
-        $photoValue = 'data:' . $mime . ';base64,' . base64_encode($bytes);
+        $photoValue = $photoB64;
     }
 
     $data = [
