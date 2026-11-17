@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+requireAdminLogin(); // must run BEFORE any POST/GET handling below
 
 $page_title = 'Announcements';
 $active_nav = 'announcements';
