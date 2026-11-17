@@ -3,6 +3,10 @@ session_start();
 require_once '../includes/db.php';
 requireAdminLogin(); // must run BEFORE any POST/GET handling below
 
+// Current page URL without the query string. Works whatever the file/route is named,
+// so renaming the page (e.g. to driver-approvals) never breaks redirects or fetch calls.
+$SELF = strtok($_SERVER['REQUEST_URI'], '?');
+
 $page_title = 'Driver Approvals';
 $active_nav = 'driver_approvals';
 
@@ -98,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($flash) $_SESSION['flash'] = $flash;
-    header('Location: driver_approvals.php');
+    header('Location: ' . $SELF);
     exit;
 }
 
@@ -108,13 +112,67 @@ unset($_SESSION['flash']);
 // Pending drivers
 $pending = $conn->query("SELECT * FROM driver WHERE is_verified=0 ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
 
-// Approved drivers (suspended ones listed last)
-$approved = $conn->query(
+// Verified drivers (no LIMIT so the filter counts stay accurate)
+$verified = $conn->query(
     "SELECT id, first_name, last_name, email, phone, location, driver_license, license_number,
             is_suspended, suspended_reason, suspended_at, created_at
      FROM driver WHERE is_verified=1
-     ORDER BY is_suspended ASC, created_at DESC LIMIT 50"
+     ORDER BY created_at DESC"
 )->fetch_all(MYSQLI_ASSOC);
+
+// Split verified drivers into active (approved) and suspended
+$approved  = array_values(array_filter($verified, fn($d) => (int)$d['is_suspended'] === 0));
+$suspended = array_values(array_filter($verified, fn($d) => (int)$d['is_suspended'] === 1));
+
+// Renders one approved/suspended driver card
+function render_driver_card($d) {
+    $susp     = (int)$d['is_suspended'] === 1;
+    $licNo    = $d['driver_license'] ?: ($d['license_number'] ?? '');
+    $fullName = $d['first_name'] . ' ' . $d['last_name'];
+    ?>
+    <div class="driver-card clickable <?= $susp ? 'is-suspended' : '' ?>"
+         onclick="openDetails(<?= (int)$d['id'] ?>)">
+        <?php if ($susp): ?>
+            <span class="suspended-badge">⛔ Suspended</span>
+        <?php else: ?>
+            <span class="approved-badge">✅ Approved</span>
+        <?php endif; ?>
+
+        <div class="dc-top" style="margin-top:8px">
+            <div class="dc-avatar">🚛</div>
+            <div class="dc-info">
+                <div class="dc-name"><?= htmlspecialchars($fullName) ?></div>
+                <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
+            </div>
+        </div>
+        <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
+
+        <?php if (!empty($licNo)): ?>
+            <div style="margin-top:8px;font-size:13px;">License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
+        <?php endif; ?>
+
+        <?php if ($susp && !empty($d['suspended_reason'])): ?>
+            <div class="dc-reason">Reason: <?= htmlspecialchars($d['suspended_reason']) ?></div>
+        <?php endif; ?>
+
+        <div class="dc-actions">
+            <?php if ($susp): ?>
+                <form method="POST" style="display:contents" onclick="event.stopPropagation()">
+                    <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
+                    <input type="hidden" name="action" value="reactivate">
+                    <button type="submit" class="btn-reactivate"
+                            onclick="event.stopPropagation(); return confirm('Reactivate this driver?')">♻ Reactivate</button>
+                </form>
+            <?php else: ?>
+                <button type="button" class="btn-suspend"
+                        onclick="event.stopPropagation(); openSuspend(<?= (int)$d['id'] ?>, <?= htmlspecialchars(json_encode($fullName), ENT_QUOTES) ?>)">
+                    ⛔ Suspend
+                </button>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php
+}
 
 include '../includes/admin_header.php';
 ?>
@@ -154,12 +212,21 @@ include '../includes/admin_header.php';
 .approved-badge{display:inline-flex;align-items:center;gap:4px;background:#e0f2f1;color:#00695c;border:1px solid #b2dfdb;border-radius:20px;font-size:11px;font-weight:800;padding:3px 10px}
 .suspended-badge{display:inline-flex;align-items:center;gap:4px;background:#ffebee;color:#c62828;border:1px solid #ffcdd2;border-radius:20px;font-size:11px;font-weight:800;padding:3px 10px}
 
-.empty-card{background:white;border-radius:12px;border:1.5px solid #e0e8f4;padding:32px;text-align:center;color:#9baabb}
+.empty-card{background:white;border-radius:12px;border:1.5px solid #e0e8f4;padding:32px;text-align:center;color:#9baabb;margin-bottom:24px}
 .empty-card .ei{font-size:48px;margin-bottom:8px;opacity:0.4}
 .section-title{font-size:18px;font-weight:900;color:#0d1b2a;margin-bottom:14px;display:flex;align-items:center;gap:8px}
 .count-badge{background:#1a73e8;color:white;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:800}
 .count-badge.orange{background:#ff6d00}
+.count-badge.red{background:#e53935}
 .hint{font-size:12px;color:#9baabb;font-weight:600;margin:-8px 0 14px}
+
+/* Status filter */
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
+.filter-btn{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;background:#fff;color:#0d1b2a;border:1.5px solid #e0e8f4;border-radius:20px;font-size:13px;font-weight:800;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.filter-btn:hover{border-color:#1a73e8}
+.filter-btn .n{background:#eef1f6;color:#6b7a99;border-radius:20px;padding:1px 8px;font-size:11px;font-weight:800}
+.filter-btn.active{background:#1a73e8;border-color:#1a73e8;color:#fff}
+.filter-btn.active .n{background:rgba(255,255,255,.25);color:#fff}
 
 /* Details modal */
 .dm-wide{max-width:560px;max-height:90vh;overflow-y:auto}
@@ -188,121 +255,109 @@ function photoMissing(img) {
     <div class="alert alert-success"><?= htmlspecialchars($flash) ?></div>
 <?php endif; ?>
 
-<div class="section-title">⏳ Pending Approval <span class="count-badge orange"><?= count($pending) ?></span></div>
+<!-- Status filter -->
+<div class="filter-bar" id="filterBar">
+    <button type="button" class="filter-btn active" data-filter="all">All
+        <span class="n"><?= count($pending) + count($approved) + count($suspended) ?></span></button>
+    <button type="button" class="filter-btn" data-filter="pending">⏳ Pending
+        <span class="n"><?= count($pending) ?></span></button>
+    <button type="button" class="filter-btn" data-filter="approved">✅ Approved
+        <span class="n"><?= count($approved) ?></span></button>
+    <button type="button" class="filter-btn" data-filter="suspended">⛔ Suspended
+        <span class="n"><?= count($suspended) ?></span></button>
+</div>
 
-<?php if (empty($pending)): ?>
-    <div class="empty-card">
-        <div class="ei">✅</div>
-        <p style="font-size:14px;font-weight:700">No pending driver applications</p>
-    </div>
-<?php else: ?>
-    <div class="approval-grid">
-    <?php foreach ($pending as $d):
-        $licNo  = $d['driver_license'] ?: ($d['license_number'] ?? '');
-        $licImg = photo_src($d['license_photo'] ?? '');
-    ?>
-        <div class="driver-card">
-            <div class="pending-badge">⏳ Awaiting Approval</div>
+<!-- Pending drivers -->
+<div class="filter-section" data-section="pending">
+    <div class="section-title">⏳ Pending Approval <span class="count-badge orange"><?= count($pending) ?></span></div>
 
-            <div class="dc-top">
-                <div class="dc-avatar">🚛</div>
-                <div class="dc-info">
-                    <div class="dc-name"><?= htmlspecialchars($d['first_name'] . ' ' . $d['last_name']) ?></div>
-                    <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
-                </div>
-            </div>
-
-            <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
-            <div class="dc-date">Registered: <?= date('M j, Y g:i A', strtotime($d['created_at'])) ?></div>
-
-            <?php if (!empty($licNo)): ?>
-                <div class="dc-license">Driver's License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
-            <?php endif; ?>
-
-            <?php if ($licImg): ?>
-                <img src="<?= htmlspecialchars($licImg) ?>" class="license-photo" alt="Driver's License"
-                     onclick="openImage(this.src)" onerror="photoMissing(this)">
-            <?php else: ?>
-                <p style="color:#e53935;font-size:13px;margin-top:8px;">No license photo uploaded</p>
-            <?php endif; ?>
-
-            <div class="dc-actions">
-                <form method="POST" style="display:contents">
-                    <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                    <input type="hidden" name="action" value="approve">
-                    <button type="submit" class="btn-approve" onclick="return confirm('Approve this driver?')">✅ Approve</button>
-                </form>
-                <form method="POST" style="display:contents">
-                    <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                    <input type="hidden" name="action" value="reject">
-                    <button type="submit" class="btn-reject" onclick="return confirm('Reject and delete this application?')">✗ Reject</button>
-                </form>
-            </div>
+    <?php if (empty($pending)): ?>
+        <div class="empty-card">
+            <div class="ei">✅</div>
+            <p style="font-size:14px;font-weight:700">No pending driver applications</p>
         </div>
-    <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+    <?php else: ?>
+        <div class="approval-grid">
+        <?php foreach ($pending as $d):
+            $licNo  = $d['driver_license'] ?: ($d['license_number'] ?? '');
+            $licImg = photo_src($d['license_photo'] ?? '');
+        ?>
+            <div class="driver-card">
+                <div class="pending-badge">⏳ Awaiting Approval</div>
 
-<!-- Approved Drivers -->
-<div class="section-title" style="margin-top:30px">✅ Approved Drivers <span class="count-badge"><?= count($approved) ?></span></div>
-<?php if (!empty($approved)): ?><p class="hint">Click a driver to view their full details.</p><?php endif; ?>
-
-<?php if (empty($approved)): ?>
-    <div class="empty-card">
-        <div class="ei">🚛</div>
-        <p style="font-size:14px;font-weight:700">No approved drivers yet</p>
-    </div>
-<?php else: ?>
-    <div class="approval-grid">
-    <?php foreach ($approved as $d):
-        $susp  = (int)$d['is_suspended'] === 1;
-        $licNo = $d['driver_license'] ?: ($d['license_number'] ?? '');
-        $fullName = $d['first_name'] . ' ' . $d['last_name'];
-    ?>
-        <div class="driver-card clickable <?= $susp ? 'is-suspended' : '' ?>"
-             onclick="openDetails(<?= (int)$d['id'] ?>)">
-            <?php if ($susp): ?>
-                <span class="suspended-badge">⛔ Suspended</span>
-            <?php else: ?>
-                <span class="approved-badge">✅ Approved</span>
-            <?php endif; ?>
-
-            <div class="dc-top" style="margin-top:8px">
-                <div class="dc-avatar">🚛</div>
-                <div class="dc-info">
-                    <div class="dc-name"><?= htmlspecialchars($fullName) ?></div>
-                    <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
+                <div class="dc-top">
+                    <div class="dc-avatar">🚛</div>
+                    <div class="dc-info">
+                        <div class="dc-name"><?= htmlspecialchars($d['first_name'] . ' ' . $d['last_name']) ?></div>
+                        <div class="dc-meta"><?= htmlspecialchars($d['phone'] ?? $d['email'] ?? '—') ?></div>
+                    </div>
                 </div>
-            </div>
-            <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
 
-            <?php if (!empty($licNo)): ?>
-                <div style="margin-top:8px;font-size:13px;">License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
-            <?php endif; ?>
+                <div class="dc-location">📍 <?= htmlspecialchars($d['location'] ?? '—') ?></div>
+                <div class="dc-date">Registered: <?= date('M j, Y g:i A', strtotime($d['created_at'])) ?></div>
 
-            <?php if ($susp && !empty($d['suspended_reason'])): ?>
-                <div class="dc-reason">Reason: <?= htmlspecialchars($d['suspended_reason']) ?></div>
-            <?php endif; ?>
-
-            <div class="dc-actions">
-                <?php if ($susp): ?>
-                    <form method="POST" style="display:contents" onclick="event.stopPropagation()">
-                        <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                        <input type="hidden" name="action" value="reactivate">
-                        <button type="submit" class="btn-reactivate"
-                                onclick="event.stopPropagation(); return confirm('Reactivate this driver?')">♻ Reactivate</button>
-                    </form>
-                <?php else: ?>
-                    <button type="button" class="btn-suspend"
-                            onclick="event.stopPropagation(); openSuspend(<?= (int)$d['id'] ?>, <?= htmlspecialchars(json_encode($fullName), ENT_QUOTES) ?>)">
-                        ⛔ Suspend
-                    </button>
+                <?php if (!empty($licNo)): ?>
+                    <div class="dc-license">Driver's License: <strong><?= htmlspecialchars($licNo) ?></strong></div>
                 <?php endif; ?>
+
+                <?php if ($licImg): ?>
+                    <img src="<?= htmlspecialchars($licImg) ?>" class="license-photo" alt="Driver's License"
+                         onclick="openImage(this.src)" onerror="photoMissing(this)">
+                <?php else: ?>
+                    <p style="color:#e53935;font-size:13px;margin-top:8px;">No license photo uploaded</p>
+                <?php endif; ?>
+
+                <div class="dc-actions">
+                    <form method="POST" style="display:contents">
+                        <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
+                        <input type="hidden" name="action" value="approve">
+                        <button type="submit" class="btn-approve" onclick="return confirm('Approve this driver?')">✅ Approve</button>
+                    </form>
+                    <form method="POST" style="display:contents">
+                        <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
+                        <input type="hidden" name="action" value="reject">
+                        <button type="submit" class="btn-reject" onclick="return confirm('Reject and delete this application?')">✗ Reject</button>
+                    </form>
+                </div>
             </div>
+        <?php endforeach; ?>
         </div>
-    <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+    <?php endif; ?>
+</div>
+
+<!-- Approved drivers (active, not suspended) -->
+<div class="filter-section" data-section="approved">
+    <div class="section-title" style="margin-top:30px">✅ Approved Drivers <span class="count-badge"><?= count($approved) ?></span></div>
+    <?php if (!empty($approved)): ?><p class="hint">Click a driver to view their full details.</p><?php endif; ?>
+
+    <?php if (empty($approved)): ?>
+        <div class="empty-card">
+            <div class="ei">🚛</div>
+            <p style="font-size:14px;font-weight:700">No approved drivers yet</p>
+        </div>
+    <?php else: ?>
+        <div class="approval-grid">
+            <?php foreach ($approved as $d) render_driver_card($d); ?>
+        </div>
+    <?php endif; ?>
+</div>
+
+<!-- Suspended drivers -->
+<div class="filter-section" data-section="suspended">
+    <div class="section-title" style="margin-top:30px">⛔ Suspended Drivers <span class="count-badge red"><?= count($suspended) ?></span></div>
+    <?php if (!empty($suspended)): ?><p class="hint">Click a driver to view their full details.</p><?php endif; ?>
+
+    <?php if (empty($suspended)): ?>
+        <div class="empty-card">
+            <div class="ei">👍</div>
+            <p style="font-size:14px;font-weight:700">No suspended drivers</p>
+        </div>
+    <?php else: ?>
+        <div class="approval-grid">
+            <?php foreach ($suspended as $d) render_driver_card($d); ?>
+        </div>
+    <?php endif; ?>
+</div>
 
 <!-- Suspend modal -->
 <div class="modal-overlay" id="suspendModal" onclick="if(event.target===this)closeModals()">
@@ -342,6 +397,32 @@ function photoMissing(img) {
 </div>
 
 <script>
+// ---- Status filter ----
+const FILTER_KEY = 'driverApprovalsFilter';
+
+function setFilter(f) {
+    document.querySelectorAll('.filter-section').forEach(sec => {
+        sec.style.display = (f === 'all' || sec.dataset.section === f) ? '' : 'none';
+    });
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === f);
+    });
+    try { sessionStorage.setItem(FILTER_KEY, f); } catch (e) {}
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => setFilter(btn.dataset.filter));
+});
+
+// Restore the last filter (so it survives approve / suspend / reactivate reloads)
+(function () {
+    let saved = 'all';
+    try { saved = sessionStorage.getItem(FILTER_KEY) || 'all'; } catch (e) {}
+    if (!['all', 'pending', 'approved', 'suspended'].includes(saved)) saved = 'all';
+    setFilter(saved);
+})();
+
+// ---- Modals / details ----
 function closeModals() {
     document.getElementById('suspendModal').classList.remove('open');
     document.getElementById('detailModal').classList.remove('open');
@@ -378,7 +459,7 @@ async function openDetails(id) {
     body.textContent = 'Loading…';
     document.getElementById('detailModal').classList.add('open');
     try {
-        const res = await fetch('driver_approvals.php?detail=' + encodeURIComponent(id));
+        const res = await fetch(<?= json_encode($SELF) ?> + '?detail=' + encodeURIComponent(id));
         if (!res.ok) throw new Error('Request failed');
         const d = await res.json();
         body.textContent = '';
