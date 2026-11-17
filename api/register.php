@@ -57,7 +57,7 @@ $DRIVER_COLS = [
     'is_verified'       => 'is_verified',         // 0 = pending admin approval
 ];
 
-$PHOTO_MODE    = 'file';
+$PHOTO_MODE    = 'db';
 $UPLOAD_DIR_FS = __DIR__ . '/../uploads/licenses/';
 $UPLOAD_DIR_DB = 'uploads/licenses/';
 // ================================================================
