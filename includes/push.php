@@ -15,14 +15,24 @@ function firebase_messaging() {
     if ($messaging) return $messaging;
 
     // Preferred: Render "Secret File". Fallback: FIREBASE_CREDENTIALS environment variable.
+    // The secret file only counts if the web server can actually READ it
+    // (on Render it can exist but be root-only, which gives "Permission denied").
     $file = '/etc/secrets/firebase-credentials.json';
-    if (file_exists($file)) {
+    if (is_readable($file)) {
         $credentials = $file;
     } else {
         $json = getenv('FIREBASE_CREDENTIALS');
-        if (!$json) return null;
+        if (!$json) {
+            if (file_exists($file)) {
+                error_log('Push: secret file exists but is not readable by the web server, and FIREBASE_CREDENTIALS is not set.');
+            }
+            return null;
+        }
         $credentials = json_decode($json, true);
-        if (!is_array($credentials)) return null;
+        if (!is_array($credentials)) {
+            error_log('Push: FIREBASE_CREDENTIALS is not valid JSON.');
+            return null;
+        }
     }
 
     $messaging = (new Factory)->withServiceAccount($credentials)->createMessaging();
