@@ -19,20 +19,38 @@ $type = (($_GET['type'] ?? 'resident') === 'driver') ? 'driver' : 'resident';
 $id   = (int)($_GET['id'] ?? 0);
 
 echo "== 1. Firebase credentials ==\n";
-$file = '/etc/secrets/firebase-credentials.json';
-echo "Secret file exists: " . (file_exists($file) ? 'YES' : 'NO') . "\n";
-if (file_exists($file)) {
-    $j = json_decode((string)file_get_contents($file), true);
+$file     = '/etc/secrets/firebase-credentials.json';
+$exists   = file_exists($file);
+$readable = is_readable($file);
+echo "Secret file exists: " . ($exists ? 'YES' : 'NO') . "\n";
+echo "Secret file readable by the web server: " . ($readable ? 'YES' : 'NO') . "\n";
+$envJson = getenv('FIREBASE_CREDENTIALS');
+echo "FIREBASE_CREDENTIALS variable set: " . ($envJson ? 'YES' : 'NO') . "\n";
+
+if ($readable) {
+    $source = 'secret file';
+    $raw    = (string)file_get_contents($file);
+} elseif ($envJson) {
+    $source = 'FIREBASE_CREDENTIALS variable';
+    $raw    = $envJson;
+} else {
+    $source = null;
+    $raw    = '';
+}
+
+if ($source === null) {
+    echo "No usable credentials. Add the FIREBASE_CREDENTIALS environment variable in Render.\n";
+} else {
+    echo "Using: $source\n";
+    $j = json_decode($raw, true);
     if (!is_array($j)) {
-        echo "File is NOT valid JSON. Re-paste the full contents (from the first { to the last }).\n";
+        echo "Contents are NOT valid JSON. Re-paste the full file (from the first { to the last }).\n";
     } else {
         echo "Valid JSON: YES\n";
         echo "project_id: "   . ($j['project_id']   ?? '(missing)') . "\n";
         echo "client_email: " . ($j['client_email'] ?? '(missing)') . "\n";
         echo "has private_key: " . (!empty($j['private_key']) ? 'YES' : 'NO') . "\n";
     }
-} else {
-    echo "FIREBASE_CREDENTIALS variable set: " . (getenv('FIREBASE_CREDENTIALS') ? 'YES' : 'NO') . "\n";
 }
 
 echo "\n== 2. Saved phone tokens ($type" . ($id ? " #$id" : ', all') . ") ==\n";
@@ -47,7 +65,7 @@ echo "\n== 3. Sending a test push ==\n";
 try {
     $messaging = firebase_messaging();
     if (!$messaging) {
-        echo "firebase_messaging() returned null: credentials were not found or not readable.\n";
+        echo "firebase_messaging() returned null: no readable credentials were found.\n";
         exit;
     }
     foreach (array_unique($tokens) as $t) {
