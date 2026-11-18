@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db.php';
+require_once '../includes/driver_mail.php';
 requireAdminLogin(); // must run BEFORE any POST/GET handling below
 
 // Current page URL without the query string. Works whatever the file/route is named,
@@ -34,6 +35,17 @@ function log_activity($conn, $text) {
     $s = $conn->prepare("INSERT INTO activity_log (action) VALUES (?)");
     $s->bind_param('s', $text);
     $s->execute();
+}
+
+// Email + full name of a driver who is still pending (null if not found / already handled).
+function pending_driver_info($conn, $id) {
+    $q = $conn->prepare("SELECT first_name, last_name, email FROM driver WHERE id = ? AND is_verified = 0 LIMIT 1");
+    $q->bind_param('i', $id);
+    $q->execute();
+    $row = $q->get_result()->fetch_assoc();
+    if (!$row) return null;
+    $row['name'] = trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
+    return $row;
 }
 
 // ---- JSON endpoint: driver details (used by the "view details" modal) ----
@@ -70,16 +82,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $flash  = null;
 
     if ($id && $action === 'approve') {
-        $s = $conn->prepare("UPDATE driver SET is_verified = 1 WHERE id = ?");
+        // Read the driver's contact details first (needed for the email).
+        $info = pending_driver_info($conn, $id);
+
+        $s = $conn->prepare("UPDATE driver SET is_verified = 1 WHERE id = ? AND is_verified = 0");
         $s->bind_param('i', $id); $s->execute();
+        $changed = $s->affected_rows > 0;
+
         log_activity($conn, "Driver ID $id was approved by admin");
         $flash = 'Driver approved.';
 
+        if ($changed && $info) {
+            $sent = send_driver_status_email($info['email'] ?? '', $info['name'], 'approved');
+            $flash .= $sent ? ' An email was sent to the driver.'
+                            : ' (The email to the driver could not be sent.)';
+        }
+
     } elseif ($id && $action === 'reject') {
+        $reason = mb_substr(trim($_POST['reason'] ?? ''), 0, 300);
+
+        // The record is deleted below, so read the email and name BEFORE deleting.
+        $info = pending_driver_info($conn, $id);
+
         $s = $conn->prepare("DELETE FROM driver WHERE id = ? AND is_verified = 0");
         $s->bind_param('i', $id); $s->execute();
-        log_activity($conn, "Driver ID $id registration was rejected");
+        $changed = $s->affected_rows > 0;
+
+        log_activity($conn, "Driver ID $id registration was rejected" . ($reason !== '' ? " (Reason: $reason)" : ''));
         $flash = 'Application rejected.';
+
+        if ($changed && $info) {
+            $sent = send_driver_status_email($info['email'] ?? '', $info['name'], 'rejected', $reason);
+            $flash .= $sent ? ' An email was sent to the driver.'
+                            : ' (The email to the driver could not be sent.)';
+        }
 
     } elseif ($id && $action === 'suspend') {
         $reason = mb_substr(trim($_POST['reason'] ?? ''), 0, 200);
@@ -313,11 +349,8 @@ function photoMissing(img) {
                         <input type="hidden" name="action" value="approve">
                         <button type="submit" class="btn-approve" onclick="return confirm('Approve this driver?')">✅ Approve</button>
                     </form>
-                    <form method="POST" style="display:contents">
-                        <input type="hidden" name="driver_id" value="<?= (int)$d['id'] ?>">
-                        <input type="hidden" name="action" value="reject">
-                        <button type="submit" class="btn-reject" onclick="return confirm('Reject and delete this application?')">✗ Reject</button>
-                    </form>
+                    <button type="button" class="btn-reject"
+                            onclick="openReject(<?= (int)$d['id'] ?>, <?= htmlspecialchars(json_encode($d['first_name'] . ' ' . $d['last_name']), ENT_QUOTES) ?>)">✗ Reject</button>
                 </div>
             </div>
         <?php endforeach; ?>
@@ -385,6 +418,32 @@ function photoMissing(img) {
     </div>
 </div>
 
+<!-- Reject modal -->
+<div class="modal-overlay" id="rejectModal" onclick="if(event.target===this)closeModals()">
+    <div class="modal">
+        <div class="modal-header">Reject Application</div>
+        <form method="POST">
+            <div class="modal-body">
+                <p style="font-size:14px;font-weight:700;margin-bottom:14px">
+                    Reject <span id="rejectName"></span>? Their application will be deleted and an email
+                    will be sent telling them it was rejected.
+                </p>
+                <input type="hidden" name="driver_id" id="rejectId">
+                <input type="hidden" name="action" value="reject">
+                <div class="form-group">
+                    <label>Reason (optional, included in the email)</label>
+                    <textarea class="form-control" name="reason" maxlength="300" style="min-height:80px"
+                              placeholder="e.g. Driver's license photo is unclear"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-cancel" onclick="closeModals()">Cancel</button>
+                <button type="submit" class="btn-reject" style="background:#e53935;color:white;border-color:#e53935">Reject</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Details modal -->
 <div class="modal-overlay" id="detailModal" onclick="if(event.target===this)closeModals()">
     <div class="modal dm-wide">
@@ -425,6 +484,7 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 // ---- Modals / details ----
 function closeModals() {
     document.getElementById('suspendModal').classList.remove('open');
+    document.getElementById('rejectModal').classList.remove('open');
     document.getElementById('detailModal').classList.remove('open');
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModals(); });
@@ -433,6 +493,12 @@ function openImage(src) {
     // data: URIs can't be opened via window.open in most browsers, so write an <img> into a new tab
     const w = window.open();
     if (w) { w.document.write('<img src="' + src + '" style="max-width:100%">'); }
+}
+
+function openReject(id, name) {
+    document.getElementById('rejectId').value = id;
+    document.getElementById('rejectName').textContent = name;
+    document.getElementById('rejectModal').classList.add('open');
 }
 
 function openSuspend(id, name) {
